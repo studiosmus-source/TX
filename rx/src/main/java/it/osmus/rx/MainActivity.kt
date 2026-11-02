@@ -280,7 +280,8 @@ class MainActivity : Activity() {
                     list.removeAllViews()
                     status.text = when {
                         pendingCount > 0 -> "Nuove richieste: $pendingCount · Apri ATTIVAZIONI"
-                        all.isEmpty() -> "Nessun telefono collegato · Apri ATTIVAZIONI"
+                        all.isEmpty() -> "Nessun telefono registrato · Apri ATTIVAZIONI"
+                        all.none { it.online } -> "Nessun telefono disponibile per i file"
                         else -> "Scegli un telefono"
                     }
                     for (device in all) {
@@ -290,8 +291,14 @@ class MainActivity : Activity() {
                             setBackgroundColor(PANEL)
                         }
                         card.addView(label(device.name, 18f, Color.WHITE, true))
-                        card.addView(label((if (device.online) "● Collegato" else "○ Non collegato") +
+                        card.addView(label((if (device.online) "● File disponibili ora" else "○ File non disponibili") +
                             " · " + device.id.take(8), 12f, if (device.online) BLUE else GREY))
+                        if (device.lastCheckIn > 0L && device.lastCheckIn <= System.currentTimeMillis()) {
+                            val whenSeen = java.text.DateFormat.getDateTimeInstance(
+                                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                                .format(java.util.Date(device.lastCheckIn))
+                            card.addView(label("Ultimo controllo GALLERY: " + whenSeen, 12f, GREY))
+                        }
                         card.addView(space(8))
                         card.addView(button("APRI GALLERIA") {
                             if (!device.online) status.text = "Il telefono non è collegato"

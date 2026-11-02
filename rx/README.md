@@ -25,3 +25,7 @@ GitHub Actions: test Node per routing multi-device e autorizzazione, test Androi
 ## RX 0.3.1 — Correzione attivazioni
 
 Nella schermata Dispositivi il pulsante **ATTIVAZIONI** apre la lista delle richieste GALLERY in attesa. Lo stato segnala anche il numero di attivazioni disponibili. In precedenza il pulsante rimandava erroneamente alla stessa schermata, impedendo di approvare un nuovo TX. Nessuna modifica al relay, alle chiavi o ai telefoni GALLERY.
+
+## RX 0.3.2 — Diagnostica dispositivo
+
+La lista RX distingue chiaramente «File disponibili ora» da «File non disponibili»; per i dispositivi che effettuano i controlli automatici mostra inoltre l'ultimo check-in comunicato dal server, se disponibile. Il check-in non equivale alla possibilità di leggere i file. Nessuna modifica a GALLERY, server, chiavi, dispositivi memorizzati o autorizzazioni.
