@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "TX"
-include(":app")
+include(":app", ":rx")
