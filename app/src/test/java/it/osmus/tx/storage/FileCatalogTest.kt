@@ -47,6 +47,27 @@ class FileCatalogTest {
             assertArrayEquals(input, first.bytes + middle.bytes + last.bytes)
         } finally { root.deleteRecursively() }
     }
+    @Test fun emptyFileAndLastChunkAtEnd() {
+        val root = Files.createTempDirectory("tx-test").toFile()
+        try {
+            File(root, ".empty").writeBytes(byteArrayOf())
+            val catalog = FileCatalog(root)
+            val chunk = catalog.readChunk(".empty", 0, 128)
+            assertTrue(chunk.complete)
+            assertEquals(0, chunk.bytes.size)
+            assertEquals(0L, chunk.nextOffset)
+        } finally { root.deleteRecursively() }
+    }
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsSymlinkOutsideRoot() {
+        val root = Files.createTempDirectory("tx-test").toFile()
+        val outside = Files.createTempDirectory("tx-outside").toFile()
+        try {
+            File(outside, "private.txt").writeText("secret")
+            Files.createSymbolicLink(File(root, "escape").toPath(), outside.toPath())
+            FileCatalog(root).readChunk("escape/private.txt", 0, 10)
+        } finally { root.deleteRecursively(); outside.deleteRecursively() }
+    }
     @Test(expected = IllegalArgumentException::class)
     fun rejectsPathTraversal() {
         val root = Files.createTempDirectory("tx-test").toFile()

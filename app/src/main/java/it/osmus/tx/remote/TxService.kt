@@ -53,7 +53,8 @@ class TxService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         if (workerThread?.isAlive == true) return START_NOT_STICKY
-        worker = RelayWorker(config)
+        connectionStatus = "Connessione HTTPS in avvio"
+        worker = RelayWorker(config) { state -> connectionStatus = state }
         active = true
         workerThread = thread(name = "tx-https-relay") {
             try { worker?.run() } finally { stopSelf() }
@@ -63,6 +64,7 @@ class TxService : Service() {
 
     override fun onDestroy() {
         active = false
+        connectionStatus = "Connessione interrotta"
         worker?.stop()
         workerThread?.interrupt()
         worker = null
@@ -78,6 +80,8 @@ class TxService : Service() {
         const val CHANNEL = "tx_connection"
         const val NOTIFICATION_ID = 1402
         @Volatile var active = false
+            private set
+        @Volatile var connectionStatus = "Connessione non avviata"
             private set
     }
 }

@@ -60,3 +60,17 @@ test('TLS can be enforced and health does not require credentials', async () => 
     assert.equal(resp.status, 403);
   } finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
 });
+
+test('TX result endpoint rejects RX credentials and malformed answers', async () => withRelay(async base => {
+  const request = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'list', path: '', offset: 0, limit: 10 });
+  assert.equal(request.status, 202);
+  const { id } = await request.json();
+  const next = await access(base + '/v1/tx/next', txToken);
+  assert.equal((await next.json()).id, id);
+  const forbidden = await access(base + '/v1/tx/result/' + id, rxToken, 'POST', { ok: true, entries: [] });
+  assert.equal(forbidden.status, 404);
+  const invalid = await access(base + '/v1/tx/result/' + id, txToken, 'POST', { entries: [] });
+  assert.equal(invalid.status, 400);
+  const result = await access(base + '/v1/tx/result/' + id, txToken, 'POST', { ok: true, entries: [], total: 0, hasMore: false });
+  assert.equal(result.status, 200);
+}));
