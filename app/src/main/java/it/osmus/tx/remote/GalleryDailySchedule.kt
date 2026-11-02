@@ -86,6 +86,7 @@ class GalleryDailyWorker(context: Context, parameters: WorkerParameters) :
     override fun doWork(): Result {
         val ctx = applicationContext
         if (!GallerySession.isEnabled(ctx)) return Result.success()
+        if (TxService.active) return Result.success()
         if (!Environment.isExternalStorageManager()) return Result.success()
         val config = SecureRelaySettings.load(ctx) ?: return Result.success()
         if (!inProgress.compareAndSet(false, true)) return Result.success()

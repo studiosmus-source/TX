@@ -1,6 +1,8 @@
 package it.osmus.tx
 
 import android.app.Activity
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -17,6 +19,8 @@ import android.widget.TextView
 import it.osmus.tx.remote.EnrollmentClient
 import it.osmus.tx.remote.GallerySession
 import it.osmus.tx.remote.GalleryDailySchedule
+import it.osmus.tx.remote.GalleryAccess
+import it.osmus.tx.remote.TxService
 import it.osmus.tx.remote.SecureRelaySettings
 import kotlin.concurrent.thread
 
@@ -29,6 +33,7 @@ class MainActivity : Activity() {
     private var enrollment: EnrollmentClient? = null
     private var enrollmentThread: Thread? = null
     private var activationMessage = ""
+    private var notificationConsentPending = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,8 +47,14 @@ class MainActivity : Activity() {
         super.onResume()
         updateState()
         if (GallerySession.isEnabled(this)) GalleryDailySchedule.ensure(this)
-        if (Environment.isExternalStorageManager() && SecureRelaySettings.load(this) == null) {
-            beginEnrollmentIfNeeded()
+        if (Environment.isExternalStorageManager()) {
+            if (!GalleryAccess.canShowRemoteDisclosure(this)) {
+                requestInitialNotificationConsent()
+            } else if (SecureRelaySettings.load(this) == null) {
+                beginEnrollmentIfNeeded()
+            } else if (GallerySession.isEnabled(this) && !TxService.active) {
+                window.decorView.post { startWhenApproved() }
+            }
         }
     }
 
@@ -56,7 +67,9 @@ class MainActivity : Activity() {
         if (!hasWindowFocus() || isFinishing || isDestroyed ||
             !Environment.isExternalStorageManager()) return
         val prefs = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
-        if (prefs.getBoolean("pending", false) && SecureRelaySettings.load(this) != null)
+        if ((prefs.getBoolean("pending", false) || GallerySession.isEnabled(this)) &&
+            SecureRelaySettings.load(this) != null && GalleryAccess.canShowRemoteDisclosure(this) &&
+            !TxService.active)
             startConnection(backgroundAfterStart = true)
     }
 
@@ -152,16 +165,11 @@ class MainActivity : Activity() {
         actionButton.isEnabled = GallerySession.isEnabled(this) || (hasPermission && activated)
         activationStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
         activationStatus.text = when {
-            GallerySession.isEnabled(this) -> {
-                val last = getSharedPreferences("tx_daily_status_v1", MODE_PRIVATE)
-                    .getLong("last_online", 0L)
-                if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-                    android.content.pm.PackageManager.PERMISSION_GRANTED)
-                    "✓ Controllo giornaliero attivo · trasferimento file non abilitato"
-                else if (last > 0L) "✓ Collegamento giornaliero attivo"
-                else "✓ Collegamento giornaliero programmato"
-            }
+            TxService.active -> "✓ RX può consultare i file · " + TxService.connectionStatus
+            GallerySession.isEnabled(this) -> "✓ Autorizzazione attiva · attendo la prossima sessione"
+            !GalleryAccess.canShowRemoteDisclosure(this) ->
+                "Per condividere i file è necessario autorizzare le notifiche di accesso"
+
             activated -> "✓ Pronto"
             !hasPermission -> ""
             else -> activationMessage.ifBlank { "Attivazione in corso…" }
@@ -175,17 +183,26 @@ class MainActivity : Activity() {
 
     private fun startConnectionNow(backgroundAfterStart: Boolean) {
         if (!Environment.isExternalStorageManager() || SecureRelaySettings.load(this) == null) return
+        if (!GalleryAccess.canShowRemoteDisclosure(this)) {
+            requestInitialNotificationConsent()
+            updateState()
+            return
+        }
         try {
+            // Consent comes from storage permission and RX pairing approval.
             GallerySession.setEnabled(this, true)
-            GalleryDailySchedule.activate(this)
+            GalleryDailySchedule.ensure(this)
+            startForegroundService(Intent(this, TxService::class.java))
             getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
                 .putBoolean("pending", false).apply()
-            activationMessage = "Connessione in avvio"
+            activationMessage = "Connessione HTTPS in avvio"
             updateState()
-            if (backgroundAfterStart) moveTaskToBack(true)
+            // Setup UI ends; the authorized service and its notice remain visible to the owner.
+            if (backgroundAfterStart) finishAndRemoveTask()
         } catch (_: Exception) {
-            GallerySession.setEnabled(this, false)
-            activationMessage = "Impossibile programmare il collegamento"
+            // The daily background window remains a fallback when Android restricts FGS.
+            GalleryDailySchedule.activate(this)
+            activationMessage = "Avvio continuo limitato da Android · recupero periodico programmato"
             updateState()
         }
     }
@@ -193,10 +210,36 @@ class MainActivity : Activity() {
     private fun stopConnection() {
         GallerySession.setEnabled(this, false)
         GalleryDailySchedule.cancel(this)
+        stopService(Intent(this, TxService::class.java))
         getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
             .putBoolean("pending", false).apply()
         activationMessage = "Collegamento periodico disattivato"
         updateState()
+    }
+
+    private fun requestInitialNotificationConsent() {
+        if (Build.VERSION.SDK_INT < 33 || notificationConsentPending) return
+        val prefs = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
+        if (prefs.getBoolean("notification_prompted", false)) return
+        notificationConsentPending = true
+        prefs.edit().putBoolean("notification_prompted", true).apply()
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+    }
+
+    @Deprecated("Android permission callback")
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != NOTIFICATION_REQUEST) return
+        notificationConsentPending = false
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            if (SecureRelaySettings.load(this) == null) beginEnrollmentIfNeeded()
+            else if (GallerySession.isEnabled(this)) startWhenApproved()
+        } else {
+            activationMessage = "Autorizzazione notifiche negata: trasferimenti file disabilitati"
+            updateState()
+        }
     }
 
     private fun openPermissionSettings() {
@@ -214,6 +257,7 @@ class MainActivity : Activity() {
     }
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     companion object {
+        private const val NOTIFICATION_REQUEST = 507
         private val SKY = Color.rgb(116, 192, 238)
         private val SILVER = Color.rgb(196, 204, 217)
         private val GREEN = Color.rgb(102, 224, 163)
