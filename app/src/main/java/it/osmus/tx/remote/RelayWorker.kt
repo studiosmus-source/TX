@@ -12,7 +12,10 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Long-poll OUTBOUND HTTPS: funziona anche dietro NAT e su reti differenti. */
-class RelayWorker(private val config: RelayConfig) {
+class RelayWorker(
+    private val config: RelayConfig,
+    private val onState: (String) -> Unit = {}
+) {
     private val running = AtomicBoolean(true)
     @Volatile private var activeConnection: HttpURLConnection? = null
     private val catalog by lazy { FileCatalog(Environment.getExternalStorageDirectory()) }
@@ -28,6 +31,7 @@ class RelayWorker(private val config: RelayConfig) {
             try {
                 val command = request("GET", "/v1/tx/next")
                 failures = 0
+                onState("Relay HTTPS raggiungibile")
                 if (!running.get()) break
                 if (command.optBoolean("pending", false)) continue
                 val id = command.optString("id")
@@ -36,8 +40,9 @@ class RelayWorker(private val config: RelayConfig) {
                     JSONObject().put("ok", false).put("error", error.message ?: "Accesso negato")
                 }
                 request("POST", "/v1/tx/result/$id", answer)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 if (!running.get()) break
+                onState("Connessione non disponibile: ${error.message ?: "errore sconosciuto"}")
                 failures = (failures + 1).coerceAtMost(5)
                 try { Thread.sleep((1000L shl failures).coerceAtMost(20_000L)) }
                 catch (_: InterruptedException) { break }
@@ -97,9 +102,15 @@ class RelayWorker(private val config: RelayConfig) {
             if (code !in 200..299) throw IOException("Server HTTP $code")
             val json = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
                 // Risposta limitata, anche se il server viene compromesso.
-                val text = reader.readText()
-                if (text.length > 256_000) throw IOException("Risposta eccessiva")
-                JSONObject(text)
+                val text = StringBuilder()
+                val chars = CharArray(4096)
+                while (true) {
+                    val count = reader.read(chars)
+                    if (count < 0) break
+                    if (text.length + count > 256_000) throw IOException("Risposta eccessiva")
+                    text.append(chars, 0, count)
+                }
+                JSONObject(text.toString())
             }
             return json
         } finally {

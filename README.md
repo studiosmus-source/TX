@@ -1,8 +1,8 @@
 # TX – Trasmittente Android
 
-**Versione sorgenti: 0.2.0** – app di accesso remoto **in sola lettura** alla memoria condivisa del dispositivo, anche quando TX e RX si trovano su reti differenti. Il progetto è composto da:
+**Versione sorgenti: 0.2.1** – app di accesso remoto **in sola lettura** alla memoria condivisa del dispositivo, anche quando TX e RX si trovano su reti differenti. Il progetto è composto da:
 
-- `app/`: Android nativo Kotlin, schermata permesso, catalogo file (inclusi file nascosti accessibili), lettura in blocchi, client HTTPS in uscita e servizio esplicitamente avviato con notifica visibile.
+- `app/`: Android nativo Kotlin, schermata permesso, catalogo file (inclusi file nascosti accessibili), lettura in blocchi, client HTTPS in uscita e servizio esplicitamente avviato con notifica visibile. Stato di connessione consultabile dall’app; lettura risposta HTTP limitata durante il download.
 - `relay/`: server Node.js 22 senza dipendenze, funzioni di inoltro richieste e risposte in RAM, niente archiviazione permanente dei file.
 - `relay/rx-cli.mjs`: ricevente **di prova** da terminale (non è ancora l'APK RX).
 

@@ -80,6 +80,7 @@ class MainActivity : Activity() {
         stopButton = Button(this).apply { text = "INTERROMPI CONNESSIONE"; isAllCaps = false; setOnClickListener { stop() } }
         column.addView(startButton)
         column.addView(stopButton)
+        column.addView(Button(this).apply { text = "AGGIORNA STATO"; isAllCaps = false; setOnClickListener { updateState() } })
         column.addView(space(12))
         info = text("", 13f, SILVER)
         column.addView(info)
@@ -95,8 +96,8 @@ class MainActivity : Activity() {
         inspectButton.isEnabled = allowed
         startButton.isEnabled = allowed && !TxService.active
         stopButton.isEnabled = TxService.active
-        if (TxService.active) info.text = "Connessione in esecuzione • notifica Android attiva"
-        else if (info.text.startsWith("Connessione in esecuzione")) info.text = "Connessione ferma"
+        if (TxService.active) info.text = TxService.connectionStatus + " • notifica Android attiva"
+        else if (info.text.startsWith("Relay HTTPS") || info.text.startsWith("Connessione non disponibile")) info.text = "Connessione ferma"
     }
 
     private fun start() {
