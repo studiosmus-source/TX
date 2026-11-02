@@ -164,14 +164,14 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
       if (pathname === '/v1/rx/request' && req.method === 'POST' && isRx) {
         if (pending.size >= MAX_PENDING) return send(res, 429, { error: 'busy' });
         const obj = await receive(req, MAX_REQUEST_BYTES);
-        if (!obj || !['list', 'read'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
+        if (!obj || !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
             !Number.isSafeInteger(obj.offset) || obj.offset < 0 ||
-            (obj.op === 'list' && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > 200)) ||
+            ((obj.op === 'list' || obj.op === 'gallery') && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > (obj.op === 'gallery' ? 80 : 200))) ||
             (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > 65_536))) {
           return send(res, 400, { error: 'invalid_request' });
         }
         const id = randomUUID();
-        const job = { id, command: { op: obj.op, path: obj.path, offset: obj.offset, ...(obj.op === 'list' ? { limit: obj.limit } : { length: obj.length }) }, state: 'queued', created: Date.now(), waitingRx: new Set(), result: null };
+        const job = { id, command: { op: obj.op, path: obj.path, offset: obj.offset, ...(['list', 'gallery'].includes(obj.op) ? { limit: obj.limit } : obj.op === 'read' ? { length: obj.length } : {}) }, state: 'queued', created: Date.now(), waitingRx: new Set(), result: null };
         pending.set(id, job);
         send(res, 202, { id });
         dispatch();

@@ -34,6 +34,39 @@ class RxApi(private val credentials: Credentials) {
         check(result.optBoolean("approved")) { "Attivazione non confermata" }
     }
 
+    data class GalleryItem(
+        val path: String, val name: String, val type: String,
+        val size: Long, val modified: Long
+    )
+    data class GalleryPage(val entries: List<GalleryItem>, val hasMore: Boolean, val nextOffset: Int)
+
+    fun gallery(offset: Int, limit: Int = 36): GalleryPage {
+        val result = call(JSONObject().put("op", "gallery").put("path", "")
+            .put("offset", offset).put("limit", limit))
+        val entries = result.getJSONArray("entries")
+        return GalleryPage((0 until entries.length()).map { index ->
+            val item = entries.getJSONObject(index)
+            GalleryItem(item.getString("path"), item.getString("name"),
+                item.getString("type"), item.getLong("size"), item.getLong("modified"))
+        }, result.getBoolean("hasMore"), result.getInt("nextOffset"))
+    }
+
+    fun thumbnail(path: String): ByteArray {
+        val result = call(JSONObject().put("op", "thumb").put("path", path)
+            .put("offset", 0))
+        val decoded = Base64.decode(result.getString("base64"), Base64.DEFAULT)
+        if (decoded.size > 48_000 || decoded.isEmpty()) throw IOException("Anteprima non valida")
+        return decoded
+    }
+
+    fun preview(path: String): ByteArray {
+        val result = call(JSONObject().put("op", "preview").put("path", path)
+            .put("offset", 0))
+        val decoded = Base64.decode(result.getString("base64"), Base64.DEFAULT)
+        if (decoded.size > 100_000 || decoded.isEmpty()) throw IOException("Immagine non valida")
+        return decoded
+    }
+
     fun list(path: String, offset: Int, limit: Int = 100): DirectoryPage {
         require(offset >= 0 && limit in 1..200)
         val result = call(JSONObject().put("op", "list").put("path", path)

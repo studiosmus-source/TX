@@ -3,6 +3,7 @@ package it.osmus.tx.remote
 import android.os.Environment
 import android.util.Base64
 import it.osmus.tx.storage.FileCatalog
+import it.osmus.tx.storage.MediaCatalog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -13,12 +14,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Long-poll OUTBOUND HTTPS: funziona anche dietro NAT e su reti differenti. */
 class RelayWorker(
+    private val context: android.content.Context,
     private val config: RelayConfig,
     private val onState: (String) -> Unit = {}
 ) {
     private val running = AtomicBoolean(true)
     @Volatile private var activeConnection: HttpURLConnection? = null
     private val catalog by lazy { FileCatalog(Environment.getExternalStorageDirectory()) }
+    private val media by lazy { MediaCatalog(context, Environment.getExternalStorageDirectory()) }
 
     fun stop() {
         running.set(false)
@@ -64,6 +67,23 @@ class RelayWorker(
                 }
                 JSONObject().put("ok", true).put("entries", entries)
                     .put("total", page.total).put("hasMore", page.hasMore)
+            }
+            "gallery" -> {
+                val page = media.gallery(command.getInt("offset"), command.getInt("limit"))
+                val entries = JSONArray()
+                page.entries.forEach { item ->
+                    entries.put(JSONObject().put("path", item.path)
+                        .put("name", item.name).put("type", item.type)
+                        .put("size", item.size).put("modified", item.modified))
+                }
+                JSONObject().put("ok", true).put("entries", entries)
+                    .put("hasMore", page.hasMore)
+                    .put("nextOffset", page.nextOffset)
+            }
+            "thumb", "preview" -> {
+                val bytes = media.thumbnail(path, command.getString("op") == "preview")
+                JSONObject().put("ok", true)
+                    .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
             }
             "read" -> {
                 val chunk = catalog.readChunk(path, command.getLong("offset"), command.getInt("length"))
