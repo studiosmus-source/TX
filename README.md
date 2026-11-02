@@ -1,57 +1,36 @@
 # TX – Trasmittente Android
 
-**Versione sorgenti: 0.2.1** – app di accesso remoto **in sola lettura** alla memoria condivisa del dispositivo, anche quando TX e RX si trovano su reti differenti. Il progetto è composto da:
+**0.3.0 – Attivazione da remoto, senza campi di configurazione sul trasmittente.**
 
-- `app/`: Android nativo Kotlin, schermata permesso, catalogo file (inclusi file nascosti accessibili), lettura in blocchi, client HTTPS in uscita e servizio esplicitamente avviato con notifica visibile. Stato di connessione consultabile dall’app; lettura risposta HTTP limitata durante il download.
-- `relay/`: server Node.js 22 senza dipendenze, funzioni di inoltro richieste e risposte in RAM, niente archiviazione permanente dei file.
-- `relay/rx-cli.mjs`: ricevente **di prova** da terminale (non è ancora l'APK RX).
+## Esperienza TX
 
-## Cosa fa esattamente
+1. Si apre l'APK e si concede **Accesso a tutti i file** attraverso le impostazioni Android.
+2. TX inoltra automaticamente una richiesta di attivazione al relay preconfigurato `https://tx-3dhs.onrender.com`.
+3. Dal dispositivo RX si approva la richiesta (tramite la pagina di attivazione web in questa versione), inserendo **RX_TOKEN** per autenticarsi e **TX_TOKEN** per attivare il trasmittente. Selezionare soltanto la richiesta identificata dal codice mostrato da TX.
+4. La chiave TX viene consegnata attraverso HTTPS, memorizzata cifrata con **Android Keystore** sul trasmittente e il pulsante **SALVA E AVVIA** diventa disponibile.
+5. Quando si preme il pulsante, il servizio Android avvia la connessione HTTPS e risponde alle richieste del ricevente. Premendo nuovamente lo stesso pulsante si interrompe la sessione.
 
-TX apre una connessione HTTPS in uscita al server relay e aspetta richieste. Il futuro RX invia un comando di elenco cartella (`list`) o lettura a blocchi (`read`). TX risponde consultando la memoria condivisa già accessibile al suo processo. Non richiede l'apertura di porte sui router; non carica foto o video senza una richiesta di lettura; non replica l'archivio intero.
+Il trasmittente **non chiede URL né chiavi**. Il relay non archivia i file del telefono, ma inoltra le risposte in RAM. L'accesso da remoto funziona soltanto per le aree consentite da Android: non sono accessibili i dati privati protetti delle altre app. Il server può vedere i dati inoltrati (TLS, non cifratura end-to-end).
 
-Non è una connessione peer-to-peer: il server inoltra i dati **temporaneamente in memoria** e può leggere i contenuti (TLS protegge il trasporto, non cifratura end-to-end). Occorrono **due chiavi distinte**, una sul trasmittente e una sul ricevente; il server richiede l'autenticazione su ogni chiamata. Le chiavi non sono presenti nel repository.
+## Approva dal browser RX, per ora
 
-## Avvio del relay
+Aprire `https://tx-3dhs.onrender.com/pair` sul telefono ricevente.
 
-Su un server con **HTTPS pubblico**, installare Node.js >= 22, configurare `TX_TOKEN` e `RX_TOKEN` casuali e diversi (minimo 32 caratteri ciascuno), quindi:
+- Inserire la chiave **RX_TOKEN** (autenticazione della pagina) e la chiave **TX_TOKEN** per autorizzare il TX.
+- Premere **Cerca richieste**, confrontare il codice mostrato sul trasmittente, e premere **Approva questa richiesta**.
+- Non condividere nessuna chiave con altre persone. Non sono presenti segreti nei sorgenti GitHub o nell'APK.
 
-```bash
-cd relay
-node server.mjs
-```
+**Limite attuale:** la pagina web non invia notifiche push; va aperta manualmente. Una vera notifica sul telefono ricevente richiede ancora l'app RX e il suo canale push. Le richieste di attivazione scadono dopo 10 minuti; TX ne invia un'altra se è ancora aperta. Su Render Free lo spin-down può interrompere sessioni non ancora completate.
 
-Il server ascolta sulla porta `PORT` (predefinita `8080`). **Per Internet deve trovarsi dietro un proxy TLS attendibile** che imposti/sovrascriva `X-Forwarded-Proto: https`, come un provider gestito. Non esporre la porta HTTP direttamente a Internet. Senza TLS valido TX rifiuta il collegamento. La URL finale è `https://...`.
+## Struttura
 
-Generare ciascuna chiave con `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Conservare segretamente e separatamente le chiavi; **mai nel GitHub repository, ZIP di sorgenti condiviso o log**. Il relay è a coppia singola nella versione 0.2; riavvii server cancellano le richieste ancora in coda.
+- `app/`: Android Kotlin, richiesta automatica, Keystore AES-GCM, avvio/interruzione del servizio solo dopo l'approvazione.
+- `relay/server.mjs`: HTTPS dietro proxy Render, autenticazione RX e TX, richieste di pairing temporanee, lettura file a blocchi.
+- `relay/pair.html` e `relay/pair.js`: pagina amministrativa senza script di terze parti e senza salvataggio delle chiavi nel browser.
+- `relay/rx-cli.mjs`: client di collaudo, non APK ricevente.
 
-## Avvio TX su Android
+## Build e test
 
-1. Installare TX sul proprio telefono, aprirla e concedere **Accesso a tutti i file** nella schermata speciale di Android.
-2. Inserire una volta l'URL HTTPS del relay e `TX_TOKEN` (non `RX_TOKEN`).
-3. Toccare **Salva e avvia**. La notifica Android identifica la sessione remota attiva; dall'app si può toccare **Interrompi connessione**.
+L'APK non contiene chiavi. `cd relay && node --test test/*.test.mjs` verifica autenticazione e pairing; la pipeline GitHub esegue anche `gradle testDebugUnitTest assembleDebug`. Il relay deve essere pubblicato su Render aggiornando il branch `main`. Le richieste automatiche RX e TX sono **da collaudare su dispositivi reali**.
 
-Su Android 15+ il servizio `dataSync` in background può avere un limite **cumulativo di 6 ore su 24**. Non è garantita disponibilità 24/7. In futuro servirà una soluzione di sessioni on-demand e/o un'architettura alternativa conforme alle regole del sistema.
-
-L'accesso a tutti i file non dà accesso a `Android/data` e alle directory private di altre app. Anche foto e file esclusi dalle gallerie tramite `.nomedia` sono mostrati se il sistema li rende leggibili.
-
-Le credenziali sono conservate nelle preferenze private dell'app Android; per produzione andranno protette ulteriormente con Android Keystore. L'app non parte automaticamente al riavvio e **non è progettata per funzionare nascosta**.
-
-## Ricevente di prova
-
-Prima dell'APK Android RX, da un computer con Node 22 si può provare:
-
-```bash
-RX_TOKEN='<chiave RX>' node relay/rx-cli.mjs https://relay.example list DCIM/Camera
-RX_TOKEN='<chiave RX>' node relay/rx-cli.mjs https://relay.example download DCIM/Camera/esempio.jpg ./foto.jpg
-```
-
-L'URL deve essere `https://`; il test CLI non accetta server HTTP. Il download della CLI accumula i blocchi in RAM, quindi è adatta a prove su file piccoli, non a video molto grandi. La futura RX Android dovrà scrivere i blocchi progressivamente su disco e supportare ripresa del download.
-
-## Verifiche
-
-- `cd relay && node --test test/*.test.mjs` (test autenticazione e inoltro remoto in-memory).
-- `gradle testDebugUnitTest assembleDebug` in ambiente Android SDK 35, Gradle 8.13 e JDK 17.
-- `.github/workflows/android.yml` esegue le prove e salva l'APK di debug sotto gli artifact GitHub Actions quando la build riesce.
-
-**Non è stata dichiarata nessuna prova funzionale fra due telefoni reali.** Un server pubblico configurato e l'APK RX sono ancora necessari.
+Il servizio Android può essere sospeso dal sistema dopo i limiti dei foreground service `dataSync` (Android 15+). Non è garantito il funzionamento permanente. L'app TX mostra lo stato e la notifica Android durante la trasmissione.

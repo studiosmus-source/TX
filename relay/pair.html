@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TX — Attivazioni</title>
+<style>
+:root{color-scheme:dark}body{background:#0c1220;color:#ecf2fb;font:16px system-ui,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px}h1{margin-bottom:4px}small,p{color:#b5c4d8}label{display:block;margin:18px 0 6px}input{width:100%;box-sizing:border-box;background:#172339;color:white;padding:14px;border:1px solid #354563;border-radius:9px;font-size:16px}button{background:#a8d4ff;border:0;padding:12px 18px;margin:16px 8px 0 0;border-radius:9px;font-weight:700;cursor:pointer}button:disabled{opacity:.5}.request{background:#18243a;padding:15px;border-radius:12px;margin:12px 0}.code{font:700 24px monospace;color:#e7bc79;letter-spacing:2px}.error{color:#ffa6aa}.success{color:#a2e9bb}</style></head><body>
+<h1>TX · Attivazioni</h1><p>Autorizza il tuo telefono trasmittente. Nessun file viene letto durante l'attivazione.</p>
+<label for="rx">Chiave RX (accesso a questa pagina)</label><input type="password" id="rx" autocomplete="off">
+<label for="tx">Chiave TX (da inviare al telefono autorizzato)</label><input type="password" id="tx" autocomplete="off">
+<button id="refresh">Cerca richieste</button><div id="status" role="status" aria-live="polite"></div><section id="requests"></section>
+<p><small>Controlla che il nome e il codice della richiesta corrispondano al telefono TX. Le chiavi restano soltanto nella memoria di questa pagina e non vengono salvate nel browser.</small></p>
+<script src="/pair.js" defer></script></body></html>
