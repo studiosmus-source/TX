@@ -45,6 +45,19 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) startWhenApproved()
+    }
+
+    private fun startWhenApproved() {
+        if (!hasWindowFocus() || isFinishing || isDestroyed || TxService.active ||
+            !Environment.isExternalStorageManager()) return
+        val prefs = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
+        if (prefs.getBoolean("pending", false) && SecureRelaySettings.load(this) != null)
+            startConnection(backgroundAfterStart = true)
+    }
+
     override fun onDestroy() {
         enrollment?.cancel()
         enrollmentThread?.interrupt()
@@ -64,7 +77,7 @@ class MainActivity : Activity() {
             setContentView(this)
         }
         column.addView(text("TX", 36f, Color.WHITE, true))
-        column.addView(text("TRASMITTENTE  •  V0.3.1", 12f, SKY, true))
+        column.addView(text("TRASMITTENTE  •  V0.4", 12f, SKY, true))
         column.addView(space(24))
         column.addView(space(44))
         permissionStatus = text("", 15f, SILVER, true)
@@ -99,7 +112,12 @@ class MainActivity : Activity() {
                 onCode = { code -> showMessage("Codice: $code\nIn attesa di approvazione") },
                 onReady = { token ->
                     val saved = runCatching { SecureRelaySettings.save(applicationContext, token) }.isSuccess
-                    showMessage(if (saved) "✓ Pronto" else "Salvataggio sicuro non riuscito.")
+                    if (saved) {
+                        getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
+                            .putBoolean("pending", true).apply()
+                        showMessage("✓ Attivato")
+                        runOnUiThread { startWhenApproved() }
+                    } else showMessage("Salvataggio sicuro non riuscito.")
                 },
                 onError = { showMessage(it) }
             )
@@ -133,12 +151,16 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startConnection() {
+    private fun startConnection(backgroundAfterStart: Boolean = false) {
         if (!Environment.isExternalStorageManager() || SecureRelaySettings.load(this) == null) return
         try {
             startForegroundService(Intent(this, TxService::class.java))
-            activationMessage = "Avvio richiesto…"
+            getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
+                .putBoolean("pending", false).apply()
+            activationMessage = "Connessione in avvio"
             updateState()
+            // Leave the Activity, not the foreground service; its notification remains visible.
+            if (backgroundAfterStart) moveTaskToBack(true)
         } catch (e: Exception) {
             activationMessage = "Impossibile avviare la connessione: ${e.javaClass.simpleName}"
             updateState()
@@ -146,6 +168,8 @@ class MainActivity : Activity() {
     }
 
     private fun stopConnection() {
+        getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
+            .putBoolean("pending", false).apply()
         stopService(Intent(this, TxService::class.java))
         activationMessage = "Connessione interrotta"
         updateState()

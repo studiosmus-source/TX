@@ -54,7 +54,7 @@ class TxService : Service() {
         }
         if (workerThread?.isAlive == true) return START_NOT_STICKY
         connectionStatus = "Connessione HTTPS in avvio"
-        worker = RelayWorker(config) { state -> connectionStatus = state }
+        worker = RelayWorker(this, config) { state -> connectionStatus = state }
         active = true
         workerThread = thread(name = "tx-https-relay") {
             try { worker?.run() } finally { stopSelf() }
