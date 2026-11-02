@@ -16,7 +16,7 @@ class MediaCatalog(private val context: Context, root: File) {
     private val rootPath = root.canonicalFile.toPath()
     data class Item(val path: String, val name: String, val type: String,
                     val size: Long, val modified: Long)
-    data class Page(val entries: List<Item>, val hasMore: Boolean)
+    data class Page(val entries: List<Item>, val hasMore: Boolean, val nextOffset: Int)
 
     fun gallery(offset: Int, limit: Int): Page {
         require(offset >= 0 && limit in 1..80)
@@ -34,6 +34,7 @@ class MediaCatalog(private val context: Context, root: File) {
         }
         val entries = mutableListOf<Item>()
         var hasMore = false
+        var rowsRead = 0
         val projection = arrayOf(MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.DISPLAY_NAME,
             MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.DATE_MODIFIED)
@@ -44,9 +45,8 @@ class MediaCatalog(private val context: Context, root: File) {
             val typeIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
             val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
             val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
-            var rows = 0
             while (cursor.moveToNext()) {
-                if (rows++ >= limit) { hasMore = true; break }
+                if (rowsRead++ >= limit) { hasMore = true; break }
                 val rawPath = cursor.getString(pathIndex) ?: continue
                 val path = safePath(rawPath) ?: continue
                 val type = when (cursor.getInt(typeIndex)) {
@@ -61,11 +61,11 @@ class MediaCatalog(private val context: Context, root: File) {
                     cursor.getLong(modifiedIndex).coerceAtLeast(0) * 1000L))
             }
         } ?: throw IOException("Indice multimediale non disponibile")
-        return Page(entries, hasMore)
+        return Page(entries, hasMore, offset + minOf(rowsRead, limit))
     }
 
     @Throws(IOException::class)
-    fun thumbnail(relativePath: String): ByteArray {
+    fun thumbnail(relativePath: String, large: Boolean = false): ByteArray {
         val file = rootPath.resolve(relativePath).normalize().toFile().canonicalFile
         require(file.toPath().startsWith(rootPath) && file.isFile && file.canRead()) {
             "File non accessibile"
@@ -74,24 +74,27 @@ class MediaCatalog(private val context: Context, root: File) {
         val video = extension in setOf("mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi")
         val image = extension in setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp")
         require(video || image) { "Anteprima non supportata" }
+        val side = if (large) 960 else 240
+        val maxBytes = if (large) 100_000 else MAX_THUMB
         val bitmap = try {
-            if (video) ThumbnailUtils.createVideoThumbnail(file, Size(240, 240), null)
-            else ThumbnailUtils.createImageThumbnail(file, Size(240, 240), null)
+            if (video) ThumbnailUtils.createVideoThumbnail(file, Size(side, side), null)
+            else ThumbnailUtils.createImageThumbnail(file, Size(side, side), null)
         } catch (error: Exception) {
             throw IOException("Anteprima non disponibile", error)
         }
         try {
             val bytes = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 65, bytes)
-            if (bytes.size() <= MAX_THUMB) return bytes.toByteArray()
+            if (bytes.size() <= maxBytes) return bytes.toByteArray()
             bytes.reset()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 35, bytes)
-            if (bytes.size() <= MAX_THUMB) return bytes.toByteArray()
-            val smaller = Bitmap.createScaledBitmap(bitmap, 144, 144, true)
+            if (bytes.size() <= maxBytes) return bytes.toByteArray()
+            val smallerSide = if (large) 600 else 144
+            val smaller = Bitmap.createScaledBitmap(bitmap, smallerSide, smallerSide, true)
             try {
                 bytes.reset()
                 smaller.compress(Bitmap.CompressFormat.JPEG, 35, bytes)
-                if (bytes.size() > MAX_THUMB) throw IOException("Anteprima troppo grande")
+                if (bytes.size() > maxBytes) throw IOException("Anteprima troppo grande")
                 return bytes.toByteArray()
             } finally { if (smaller !== bitmap) smaller.recycle() }
         } finally { bitmap.recycle() }

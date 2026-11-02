@@ -1,11 +1,11 @@
-# RX Android 0.1.0
+# RX Android 0.2.0
 
 L'app RX è un modulo separato (:rx) nel repository TX; non richiede modifiche al relay Render.
 
 Funzioni:
 - Inserisci RX_TOKEN e TX_TOKEN **solo in RX** al primo avvio; le chiavi sono cifrate tramite Android Keystore.
 - Consulta le richieste di attivazione TX e approva quella con il codice visualizzato sul dispositivo trasmittente.
-- Apri "File remoti", naviga tra le cartelle (anche nascoste) e carica altri risultati scorrendo.
+- Galleria principale con foto e video indicizzati, anteprime e visualizzazione grande; scheda File remoti per navigare tra le cartelle (anche nascoste) e carica altri risultati scorrendo.
 - Tocca un file, scegli "Scarica" e seleziona dove salvarlo tramite il selettore documenti Android. Il contenuto viene letto in blocchi e scritto direttamente nel documento, senza accumularlo in RAM.
 - Dopo il download, scegli "Apri". È disponibile l'annullamento.
 
@@ -19,7 +19,7 @@ Limitazioni:
 - L'ordine dell'elenco è deciso dal TX (prima cartelle, poi nomi).
 - Download senza ripresa dopo chiusura; mantenere RX aperta durante i trasferimenti.
 - Render Free può sospendersi per inattività. Il servizio TX può essere sospeso dal sistema Android.
-- Dopo l'approvazione, sul trasmittente occorre premere "SALVA E AVVIA".
+- Dopo l'approvazione TX avvia il servizio, torna alla home e mantiene la notifica Android visibile. Android 15+ può sospenderlo dopo 6 ore di dataSync in 24 ore.
 
 Build:
 gradle :rx:testDebugUnitTest :rx:assembleDebug

@@ -78,9 +78,10 @@ class RelayWorker(
                 }
                 JSONObject().put("ok", true).put("entries", entries)
                     .put("hasMore", page.hasMore)
+                    .put("nextOffset", page.nextOffset)
             }
-            "thumb" -> {
-                val bytes = media.thumbnail(path)
+            "thumb", "preview" -> {
+                val bytes = media.thumbnail(path, command.getString("op") == "preview")
                 JSONObject().put("ok", true)
                     .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
             }

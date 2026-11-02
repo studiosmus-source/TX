@@ -138,3 +138,31 @@ test('HTTPS restriction also covers pairing and its browser page', async () => {
     assert.equal(request.status, 403);
   } finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
 });
+
+
+test('RX gallery and preview are authorized, bounded and routed to TX', async () => withRelay(async base => {
+  const invalid = await access(base + '/v1/rx/request', rxToken, 'POST',
+    {op:'gallery',path:'',offset:0,limit:100});
+  assert.equal(invalid.status,400);
+  const unauthorized = await access(base + '/v1/rx/request','wrong','POST',
+    {op:'gallery',path:'',offset:0,limit:30});
+  assert.equal(unauthorized.status,401);
+  for (const [command,answer] of [
+    [{op:'gallery',path:'',offset:0,limit:30},{ok:true,entries:[],nextOffset:0,hasMore:false}],
+    [{op:'thumb',path:'DCIM/a.jpg',offset:0},{ok:true,base64:'ZmFrZQ=='}],
+    [{op:'preview',path:'DCIM/a.jpg',offset:0},{ok:true,base64:'ZmFrZQ=='}],
+  ]) {
+    const request = await access(base+'/v1/rx/request',rxToken,'POST',command);
+    assert.equal(request.status,202);
+    const {id}=await request.json();
+    const next=await access(base+'/v1/tx/next',txToken);
+    const sent=await next.json();
+    assert.equal(sent.op,command.op);
+    assert.equal(sent.id,id);
+    const posted=await access(base+'/v1/tx/result/'+id,txToken,'POST',answer);
+    assert.equal(posted.status,200);
+    const result=await access(base+'/v1/rx/result/'+id,rxToken);
+    assert.equal(result.status,200);
+    assert.deepEqual(await result.json(),answer);
+  }
+}));

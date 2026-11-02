@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -13,6 +14,8 @@ import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.GridLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -26,13 +29,15 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private val thumbs = Executors.newFixedThreadPool(2)
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
     private lateinit var content: LinearLayout
     private lateinit var scroller: ScrollView
     private lateinit var status: TextView
-    private var mode = 0 // 0 = setup, 1 = requests, 2 = files
+    private var mode = 0 // 0 = setup, 1 = requests, 2 = files, 3 = gallery
     private var folder = ""
+    private var galleryOffset = 0
     private var generation = 0
     private var offset = 0
     private var hasMore = false
@@ -76,12 +81,12 @@ class MainActivity : Activity() {
         root.addView(content)
         scroller.setOnScrollChangeListener { v, _, _, _, _ ->
             val child = scroller.getChildAt(0)
-            if (mode == 2 && hasMore && !loading && !downloading &&
+            if ((mode == 2 || mode == 3) && hasMore && !loading && !downloading &&
                 child != null && v.scrollY + v.height >= child.height - dp(230)) {
-                nextPage()
+                if (mode == 3) nextGalleryPage() else nextPage()
             }
         }
-        if (RxSecrets.load(this) == null) setup() else requests()
+        if (RxSecrets.load(this) == null) setup() else gallery()
     }
 
     override fun onResume() {
@@ -100,6 +105,7 @@ class MainActivity : Activity() {
         cancelled = true
         handler.removeCallbacks(autoRefresh)
         worker.shutdownNow()
+        thumbs.shutdownNow()
         super.onDestroy()
     }
 
@@ -122,7 +128,7 @@ class MainActivity : Activity() {
                 try {
                     RxApi(c).pending()
                     RxSecrets.save(applicationContext, c)
-                    ui { requests() }
+                    ui { gallery() }
                 } catch (e: Exception) { ui { status.text = safeError(e) } }
             }
         })
@@ -134,9 +140,9 @@ class MainActivity : Activity() {
         content.removeAllViews()
         status.text = "Attivazioni TX"
         val nav = horizontal()
-        nav.addView(button("FILE REMOTI") { files("") }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        nav.addView(button("GALLERIA") { gallery() }, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(spaceWidth(8))
-        nav.addView(button("AGGIORNA") { refreshRequests() },
+        nav.addView(button("FILE") { files("") },
             LinearLayout.LayoutParams(0, dp(52), 1f))
         content.addView(nav)
         content.addView(space(16))
@@ -210,6 +216,136 @@ class MainActivity : Activity() {
             }.show()
     }
 
+
+    /** Primary RX home: a 3-column paged gallery sourced solely from TX. */
+    private fun gallery() {
+        mode = 3
+        generation++
+        galleryOffset = 0
+        hasMore = true
+        loading = false
+        handler.removeCallbacks(autoRefresh)
+        content.removeAllViews()
+        status.text = "Galleria TX"
+        val nav = horizontal()
+        nav.addView(button("ATTIVAZIONI", true) { requests() },
+            LinearLayout.LayoutParams(0, dp(48), 1f))
+        nav.addView(spaceWidth(8))
+        nav.addView(button("FILE", true) { files("") },
+            LinearLayout.LayoutParams(0, dp(48), 1f))
+        content.addView(nav)
+        content.addView(space(16))
+        val grid = GridLayout(this).apply {
+            columnCount = 3
+            tag = "galleryGrid"
+        }
+        content.addView(grid)
+        scroller.post { scroller.scrollTo(0, 0) }
+        nextGalleryPage()
+    }
+
+    private fun nextGalleryPage() {
+        if (mode != 3 || loading || !hasMore || downloading) return
+        val credentials = RxSecrets.load(this) ?: return setup()
+        val currentGen = generation
+        val start = galleryOffset
+        loading = true
+        status.text = "Galleria · Caricamento…"
+        worker.execute {
+            try {
+                val page = RxApi(credentials).gallery(start)
+                ui {
+                    if (mode != 3 || currentGen != generation) return@ui
+                    val grid = content.findViewWithTag<GridLayout>("galleryGrid") ?: return@ui
+                    page.entries.forEach { addGalleryTile(grid, it, credentials, currentGen) }
+                    galleryOffset = page.nextOffset
+                    hasMore = page.hasMore && page.nextOffset > start
+                    loading = false
+                    status.text = if (grid.childCount == 0 && !hasMore) "Nessuna foto o video" else
+                        "Galleria TX"
+                    if (hasMore && grid.height < scroller.height)
+                        scroller.post { nextGalleryPage() }
+                }
+            } catch (e: Exception) {
+                ui {
+                    if (mode == 3 && currentGen == generation) {
+                        loading = false
+                        hasMore = false
+                        status.text = safeError(e)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun addGalleryTile(
+        grid: GridLayout,
+        entry: RxApi.GalleryItem,
+        credentials: Credentials,
+        currentGen: Int
+    ) {
+        val side = (resources.displayMetrics.widthPixels - dp(58)) / 3
+        val tile = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(PANEL)
+        }
+        val photo = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(PANEL)
+            setImageResource(android.R.drawable.ic_menu_gallery)
+            layoutParams = LinearLayout.LayoutParams(side, side)
+        }
+        tile.addView(photo)
+        val marker = label(if (entry.type == "video") "▶ VIDEO" else "", 10f, GREY)
+        marker.setPadding(dp(3), 0, 0, 0)
+        tile.addView(marker)
+        tile.setOnClickListener { if (!downloading) showGalleryPreview(entry, credentials) }
+        grid.addView(tile, GridLayout.LayoutParams().apply {
+            width = side
+            height = side + dp(17)
+            setMargins(dp(2), dp(2), dp(2), dp(2))
+        })
+        thumbs.execute {
+            val result = runCatching {
+                val bytes = RxApi(credentials).thumbnail(entry.path)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+            if (result != null) ui {
+                if (mode == 3 && currentGen == generation && tile.parent != null)
+                    photo.setImageBitmap(result)
+                else result.recycle()
+            }
+        }
+    }
+
+    private fun showGalleryPreview(item: RxApi.GalleryItem, credentials: Credentials) {
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(BG)
+            setImageResource(android.R.drawable.ic_menu_gallery)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.65).toInt())
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(item.name)
+            .setView(image)
+            .setNegativeButton("CHIUDI", null)
+            .setPositiveButton("SCARICA") { _, _ ->
+                chooseDownload(RemoteFile(item.path, item.name, false, false,
+                    item.size, item.modified))
+            }.create()
+        dialog.show()
+        thumbs.execute {
+            val bitmap = runCatching {
+                val bytes = RxApi(credentials).preview(item.path)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+            if (bitmap != null) ui {
+                if (dialog.isShowing) image.setImageBitmap(bitmap) else bitmap.recycle()
+            }
+        }
+    }
+
     private fun files(path: String) {
         mode = 2
         handler.removeCallbacks(autoRefresh)
@@ -224,7 +360,7 @@ class MainActivity : Activity() {
         nav.addView(button("‹ INDIETRO", true) { goBack() },
             LinearLayout.LayoutParams(0, dp(50), 1f))
         nav.addView(spaceWidth(8))
-        nav.addView(button("AGGIORNA", true) { files(folder) },
+        nav.addView(button("GALLERIA", true) { gallery() },
             LinearLayout.LayoutParams(0, dp(50), 1f))
         content.addView(nav)
         content.addView(space(13))
@@ -374,7 +510,9 @@ class MainActivity : Activity() {
                 ui {
                     downloading = false
                     content.removeView(cancel)
-                    if (mode == 2 && hasMore && !loading) nextPage()
+                    if ((mode == 2 || mode == 3) && hasMore && !loading) {
+                        if (mode == 3) nextGalleryPage() else nextPage()
+                    }
                 }
             }
         }
@@ -382,12 +520,12 @@ class MainActivity : Activity() {
 
     private fun goBack() {
         if (downloading) return
-        if (folder.isBlank()) requests() else files(folder.substringBeforeLast('/', ""))
+        if (folder.isBlank()) gallery() else files(folder.substringBeforeLast('/', ""))
     }
 
     @Deprecated("Folder navigation")
     override fun onBackPressed() {
-        if (mode == 2) goBack() else super.onBackPressed()
+        if (mode == 2) goBack() else if (mode == 1) gallery() else super.onBackPressed()
     }
 
     private fun password(hintText: String) = EditText(this).apply {

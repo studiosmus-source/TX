@@ -164,7 +164,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
       if (pathname === '/v1/rx/request' && req.method === 'POST' && isRx) {
         if (pending.size >= MAX_PENDING) return send(res, 429, { error: 'busy' });
         const obj = await receive(req, MAX_REQUEST_BYTES);
-        if (!obj || !['list', 'read', 'gallery', 'thumb'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
+        if (!obj || !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
             !Number.isSafeInteger(obj.offset) || obj.offset < 0 ||
             ((obj.op === 'list' || obj.op === 'gallery') && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > (obj.op === 'gallery' ? 80 : 200))) ||
             (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > 65_536))) {
