@@ -247,7 +247,8 @@ class MainActivity : Activity() {
         content.removeAllViews()
         status.text = "Dispositivi GALLERY"
         val nav = horizontal()
-        nav.addView(button("DISPOSITIVI", true) { devices() },
+        // New GALLERY phones are pending activations, not yet connected devices.
+        nav.addView(button("ATTIVAZIONI", true) { requests() },
             LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(spaceWidth(8))
         nav.addView(button("AGGIORNA", true) { refreshDevices() },
@@ -267,7 +268,9 @@ class MainActivity : Activity() {
         val credentials = RxSecrets.load(this) ?: return setup()
         pairWorker.execute {
             try {
-                val active = RxApi(credentials).devices()
+                val api = RxApi(credentials)
+                val pendingCount = api.pending().size
+                val active = api.devices()
                 val known = DeviceRoster.known(applicationContext).associateBy { it.id }
                 val all = (known + active.associateBy { it.id }).values
                     .sortedWith(compareByDescending<RxApi.Device> { it.online }.thenBy { it.name })
@@ -275,7 +278,11 @@ class MainActivity : Activity() {
                     if (mode != 4) return@ui
                     val list = content.findViewWithTag<LinearLayout>("deviceList") ?: return@ui
                     list.removeAllViews()
-                    status.text = if (all.isEmpty()) "Nessun telefono collegato" else "Scegli un telefono"
+                    status.text = when {
+                        pendingCount > 0 -> "Nuove richieste: $pendingCount · Apri ATTIVAZIONI"
+                        all.isEmpty() -> "Nessun telefono collegato · Apri ATTIVAZIONI"
+                        else -> "Scegli un telefono"
+                    }
                     for (device in all) {
                         val card = LinearLayout(this).apply {
                             orientation = LinearLayout.VERTICAL
