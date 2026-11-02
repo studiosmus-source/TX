@@ -1,7 +1,9 @@
 package it.osmus.tx
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -15,6 +17,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import it.osmus.tx.remote.EnrollmentClient
+import it.osmus.tx.remote.GallerySession
+import it.osmus.tx.remote.GalleryResumeNotification
 import it.osmus.tx.remote.SecureRelaySettings
 import it.osmus.tx.remote.TxService
 import kotlin.concurrent.thread
@@ -28,6 +32,8 @@ class MainActivity : Activity() {
     private var enrollment: EnrollmentClient? = null
     private var enrollmentThread: Thread? = null
     private var activationMessage = ""
+    private var pendingStartAfterNotification = false
+    private var pendingBackgroundAfterNotification = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,6 +46,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updateState()
+        if (TxService.active) GallerySession.setEnabled(this, true)
+        if (GallerySession.isEnabled(this)) window.decorView.post { startWhenApproved() }
         if (Environment.isExternalStorageManager() && SecureRelaySettings.load(this) == null) {
             beginEnrollmentIfNeeded()
         }
@@ -54,7 +62,8 @@ class MainActivity : Activity() {
         if (!hasWindowFocus() || isFinishing || isDestroyed || TxService.active ||
             !Environment.isExternalStorageManager()) return
         val prefs = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
-        if (prefs.getBoolean("pending", false) && SecureRelaySettings.load(this) != null)
+        if ((prefs.getBoolean("pending", false) || GallerySession.isEnabled(this)) &&
+            SecureRelaySettings.load(this) != null)
             startConnection(backgroundAfterStart = true)
     }
 
@@ -151,27 +160,60 @@ class MainActivity : Activity() {
     }
 
     private fun startConnection(backgroundAfterStart: Boolean = false) {
+        if (!Environment.isExternalStorageManager() || SecureRelaySettings.load(this) == null ||
+            pendingStartAfterNotification) return
+        val preferences = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED &&
+            !preferences.getBoolean("notification_prompted", false)) {
+            pendingStartAfterNotification = true
+            pendingBackgroundAfterNotification = backgroundAfterStart
+            preferences.edit().putBoolean("notification_prompted", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+            return
+        }
+        startConnectionNow(backgroundAfterStart)
+    }
+
+    private fun startConnectionNow(backgroundAfterStart: Boolean) {
         if (!Environment.isExternalStorageManager() || SecureRelaySettings.load(this) == null) return
         try {
             startForegroundService(Intent(this, TxService::class.java))
+            GallerySession.setEnabled(this, true)
+            GalleryResumeNotification.cancel(this)
             getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
                 .putBoolean("pending", false).apply()
             activationMessage = "Connessione in avvio"
             updateState()
-            // Leave the Activity, not the foreground service; its notification remains visible.
             if (backgroundAfterStart) moveTaskToBack(true)
-        } catch (e: Exception) {
-            activationMessage = "Impossibile avviare la connessione: ${e.javaClass.simpleName}"
+        } catch (_: Exception) {
+            activationMessage = "Impossibile avviare il collegamento"
             updateState()
         }
     }
 
     private fun stopConnection() {
+        GallerySession.setEnabled(this, false)
+        GalleryResumeNotification.cancel(this)
         getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
             .putBoolean("pending", false).apply()
         stopService(Intent(this, TxService::class.java))
         activationMessage = "Connessione interrotta"
         updateState()
+    }
+
+    @Deprecated("Android permission result callback")
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIFICATION_REQUEST && pendingStartAfterNotification) {
+            val background = pendingBackgroundAfterNotification
+            pendingStartAfterNotification = false
+            pendingBackgroundAfterNotification = false
+            startConnectionNow(background)
+        }
     }
 
     private fun openPermissionSettings() {
@@ -189,6 +231,7 @@ class MainActivity : Activity() {
     }
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
     companion object {
+        private const val NOTIFICATION_REQUEST = 405
         private val SKY = Color.rgb(116, 192, 238)
         private val SILVER = Color.rgb(196, 204, 217)
         private val GREEN = Color.rgb(102, 224, 163)
