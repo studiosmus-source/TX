@@ -18,14 +18,16 @@ data class RemoteFile(
 data class DirectoryPage(val entries: List<RemoteFile>, val hasMore: Boolean)
 
 class RxApi(private val credentials: Credentials, private val deviceId: String? = null) {
-    data class Device(val id: String, val name: String, val online: Boolean)
+    // lastCheckIn is a presence check only, never proof of remote file availability.
+    data class Device(val id: String, val name: String, val online: Boolean, val lastCheckIn: Long = 0L)
 
     fun devices(): List<Device> {
         val result = request("GET", "/v1/rx/devices")
         val items = result.getJSONArray("devices")
         return (0 until items.length()).map { i ->
             val item = items.getJSONObject(i)
-            Device(item.getString("id"), item.getString("name"), item.getBoolean("online"))
+            Device(item.getString("id"), item.getString("name"), item.getBoolean("online"),
+                item.optLong("lastCheckIn", 0L).coerceAtLeast(0L))
         }
     }
     fun pending(): List<PendingPair> {
