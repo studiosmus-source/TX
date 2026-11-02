@@ -28,9 +28,11 @@ class RelayWorker(
         activeConnection?.disconnect()
     }
 
-    fun run() {
+    fun run(maxDurationMs: Long = Long.MAX_VALUE) {
         var failures = 0
-        while (running.get() && !Thread.currentThread().isInterrupted) {
+        val started = android.os.SystemClock.elapsedRealtime()
+        while (running.get() && !Thread.currentThread().isInterrupted &&
+            android.os.SystemClock.elapsedRealtime() - started < maxDurationMs) {
             try {
                 val command = request("GET", "/v1/tx/next")
                 failures = 0
@@ -104,6 +106,9 @@ class RelayWorker(
             connectTimeout = 12_000
             readTimeout = 32_000
             setRequestProperty("Authorization", "Bearer ${config.txToken}")
+            setRequestProperty("X-Device-Id", config.deviceId)
+            setRequestProperty("X-Device-Name", android.os.Build.MODEL
+                .replace(Regex("[^A-Za-z0-9 ._-]"), "_").take(55).ifBlank { "GALLERY" })
             setRequestProperty("Accept", "application/json")
             instanceFollowRedirects = false
             if (body != null) {

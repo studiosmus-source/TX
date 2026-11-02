@@ -17,7 +17,7 @@ class EnrollmentClient(private val deviceName: String) {
         current?.disconnect()
     }
 
-    fun run(onCode: (String) -> Unit, onReady: (String) -> Unit, onError: (String) -> Unit) {
+    fun run(onCode: (String) -> Unit, onReady: (String, String) -> Unit, onError: (String) -> Unit) {
         while (running.get() && !Thread.currentThread().isInterrupted) {
             try {
                 val created = post("/v1/pair/request", JSONObject().put("name", deviceName))
@@ -32,9 +32,10 @@ class EnrollmentClient(private val deviceName: String) {
                     val response = post("/v1/pair/poll", JSONObject().put("id", id).put("claim", claim))
                     if (response.optBoolean("approved", false)) {
                         if (!running.get()) break
-                        val token = response.getString("txToken")
-                        RelayConfig(SecureRelaySettings.RELAY_URL, token)
-                        onReady(token)
+                        val deviceId = response.getString("deviceId")
+                        val token = response.getString("deviceToken")
+                        RelayConfig(SecureRelaySettings.RELAY_URL, token, deviceId)
+                        onReady(deviceId, token)
                         return
                     }
                 }

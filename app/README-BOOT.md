@@ -1,12 +1,22 @@
-# GALLERY — ripresa del servizio dopo il riavvio
+# GALLERY 0.5 — multi telefono e collegamento quotidiano
 
-Comportamento previsto solo dopo che l'utente ha concesso l'accesso ai file, ha completato l'autorizzazione RX e ha avviato volontariamente il collegamento almeno una volta:
+Dopo un'approvazione esplicita per **ogni telefono GALLERY**, RX mostra i dispositivi separatamente. Ogni GALLERY usa un identificativo UUID e un token distinto; non riceve la chiave principale di amministrazione.
 
-- Android 11–14: al broadcast BOOT_COMPLETED GALLERY tenta l'avvio del proprio foreground service dataSync, con notifica visibile.
-- Android 15–16: Android vieta avviare un foreground service dataSync da BOOT_COMPLETED. GALLERY pubblica, **se l'utente ha concesso il permesso notifiche**, il promemoria **«Tocca per riprendere il collegamento»**. Un tocco apre l'app, che ripristina la connessione e ritorna alla home. Il collegamento continuo senza alcun intervento non è supportato su queste versioni.
-- Riavvio del processo quando il sistema lo consente: il servizio usa START_STICKY, ma questa non è una garanzia di persistenza; restano i limiti del sistema e il limite dataSync di 6 ore cumulative ogni 24 ore su Android 15+.
-- **INTERROMPI CONNESSIONE** elimina l'intenzione di ripartire e cancella il promemoria. L'avvio involontario non è consentito.
-- Se l'app è stata arrestata forzatamente dall'utente, le trasmissioni di boot possono essere sospese fino a un nuovo avvio manuale.
-- Al primo avvio viene richiesto l'accesso alle notifiche. Se negato, GALLERY resta avviabile manualmente, ma Android 15+ non può mostrare il promemoria.
+## Attivazione
+1. Installare GALLERY 0.5 su ciascun telefono e RX 0.3 sul telefono ricevitore.
+2. In GALLERY, concedere accesso ai file e alle notifiche e confrontare il codice mostrato con quello in RX.
+3. Approvare il codice su RX. GALLERY programma una verifica quotidiana tramite WorkManager, anche dopo i riavvii. Le vecchie chiavi GALLERY 0.4.x richiedono una nuova approvazione.
+4. In RX scegliere il telefono nella pagina **Dispositivi**. Ogni galleria o download è associato esclusivamente al dispositivo scelto.
+5. Sul telefono GALLERY il pulsante **Disattiva collegamento** annulla tutte le attività automatiche.
 
-Verifica consigliata su dispositivi reali: autorizzazione iniziale, avvio, riavvio Android 14 e Android 16, notifica e tap, comando Interrompi, assenza di riavvio dopo Interrompi, perdita e ritorno della rete, permessi negati, eventuale riavvio dopo installazione update e timer Android dataSync. Compilazione in CI non equivale a test funzionale di riavvio.
+## Comportamento e limiti verificabili
+- All'attivazione viene programmata una prima finestra di connessione. Una nuova finestra di **circa 4 minuti** è programmata **ogni 24 ore**, quando Android consente l'esecuzione e Internet è disponibile.
+- WorkManager persiste i lavori dopo riavvio, ma Android 15/16, Doze, risparmio batteria e le restrizioni dei produttori possono ritardare o sopprimere una finestra; nessuna garanzia entro 24 ore esatte.
+- RX può trasferire i file **soltanto mentre il dispositivo scelto è online**. I file non sono caricati sul server e non esiste una coda persistente per trasferimenti rinviati.
+- Durante ogni finestra, GALLERY pubblica una notifica di collegamento autorizzato; se l'accesso alle notifiche non è concesso, la sincronizzazione automatica non viene avviata. La disattivazione esplicita rimane disponibile.
+- Il server su Render mantiene in RAM l'elenco dei dispositivi momentaneamente collegati. Dopo un riavvio i dispositivi si ripresentano al prossimo controllo; RX conserva sul dispositivo gli ID già approvati.
+- La disponibilità immediata da RX in qualunque momento **non è garantita**. I dispositivi mostrati offline non rispondono a richieste remote.
+- Le chiavi restano protette con Android Keystore. Le comunicazioni usano HTTPS; il relay legge i contenuti in memoria durante il trasferimento, senza cifratura end-to-end.
+- Il server deriva la chiave del dispositivo dalla chiave principale e dal suo ID, per cui una modifica di TX_TOKEN richiede una nuova approvazione. La revoca selettiva permanente non è ancora implementata.
+
+Collaudo necessario: almeno due telefoni GALLERY e un RX, prove di approvazione, isolamento delle richieste e dei file, conferma che ogni download provenga dal telefono selezionato, riavvio Android 16, intervallo giornaliero, risparmio batteria, perdita Internet, disattivazione e notifica. Il successo di CI non dimostra che tutte le condizioni Android siano soddisfatte.
