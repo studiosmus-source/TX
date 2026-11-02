@@ -18,9 +18,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import it.osmus.tx.remote.EnrollmentClient
 import it.osmus.tx.remote.GallerySession
-import it.osmus.tx.remote.GalleryResumeNotification
+import it.osmus.tx.remote.GalleryDailySchedule
 import it.osmus.tx.remote.SecureRelaySettings
-import it.osmus.tx.remote.TxService
 import kotlin.concurrent.thread
 
 /** The transmitter has no server address or key fields. */
@@ -46,8 +45,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updateState()
-        if (TxService.active) GallerySession.setEnabled(this, true)
-        if (GallerySession.isEnabled(this)) window.decorView.post { startWhenApproved() }
+        if (GallerySession.isEnabled(this)) GalleryDailySchedule.ensure(this)
         if (Environment.isExternalStorageManager() && SecureRelaySettings.load(this) == null) {
             beginEnrollmentIfNeeded()
         }
@@ -59,11 +57,10 @@ class MainActivity : Activity() {
     }
 
     private fun startWhenApproved() {
-        if (!hasWindowFocus() || isFinishing || isDestroyed || TxService.active ||
+        if (!hasWindowFocus() || isFinishing || isDestroyed ||
             !Environment.isExternalStorageManager()) return
         val prefs = getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
-        if ((prefs.getBoolean("pending", false) || GallerySession.isEnabled(this)) &&
-            SecureRelaySettings.load(this) != null)
+        if (prefs.getBoolean("pending", false) && SecureRelaySettings.load(this) != null)
             startConnection(backgroundAfterStart = true)
     }
 
@@ -103,7 +100,8 @@ class MainActivity : Activity() {
         actionButton = Button(this).apply {
             text = "SALVA E AVVIA"
             isAllCaps = false
-            setOnClickListener { if (TxService.active) stopConnection() else startConnection() }
+            setOnClickListener { if (GallerySession.isEnabled(this@MainActivity)) stopConnection()
+                else startConnection() }
         }
         column.addView(actionButton)
     }
@@ -118,8 +116,10 @@ class MainActivity : Activity() {
         enrollmentThread = thread(name = "tx-enrollment") {
             client.run(
                 onCode = { code -> showMessage("Codice: $code\nIn attesa di approvazione") },
-                onReady = { token ->
-                    val saved = runCatching { SecureRelaySettings.save(applicationContext, token) }.isSuccess
+                onReady = { deviceId, token ->
+                    val saved = runCatching {
+                        SecureRelaySettings.save(applicationContext, deviceId, token)
+                    }.isSuccess
                     if (saved) {
                         getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
                             .putBoolean("pending", true).apply()
@@ -148,11 +148,17 @@ class MainActivity : Activity() {
         permissionStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
         permissionButton.visibility = if (hasPermission) View.GONE else View.VISIBLE
         val activated = SecureRelaySettings.load(this) != null
-        actionButton.text = if (TxService.active) "INTERROMPI CONNESSIONE" else "SALVA E AVVIA"
-        actionButton.isEnabled = TxService.active || (hasPermission && activated)
+        actionButton.text = if (GallerySession.isEnabled(this)) "DISATTIVA COLLEGAMENTO"
+            else "ATTIVA COLLEGAMENTO"
+        actionButton.isEnabled = GallerySession.isEnabled(this) || (hasPermission && activated)
         activationStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
         activationStatus.text = when {
-            TxService.active -> TxService.connectionStatus
+            GallerySession.isEnabled(this) -> {
+                val last = getSharedPreferences("tx_daily_status_v1", MODE_PRIVATE)
+                    .getLong("last_online", 0L)
+                if (last > 0L) "✓ Collegamento automatico giornaliero attivo"
+                else "✓ Programmazione giornaliera attiva"
+            }
             activated -> "✓ Pronto"
             !hasPermission -> ""
             else -> activationMessage.ifBlank { "Attivazione in corso…" }
@@ -178,28 +184,34 @@ class MainActivity : Activity() {
 
     private fun startConnectionNow(backgroundAfterStart: Boolean) {
         if (!Environment.isExternalStorageManager() || SecureRelaySettings.load(this) == null) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED) {
+            activationMessage = "Consenti le notifiche per attivare GALLERY"
+            updateState()
+            return
+        }
         try {
-            startForegroundService(Intent(this, TxService::class.java))
             GallerySession.setEnabled(this, true)
-            GalleryResumeNotification.cancel(this)
+            GalleryDailySchedule.activate(this)
             getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
                 .putBoolean("pending", false).apply()
             activationMessage = "Connessione in avvio"
             updateState()
             if (backgroundAfterStart) moveTaskToBack(true)
         } catch (_: Exception) {
-            activationMessage = "Impossibile avviare il collegamento"
+            GallerySession.setEnabled(this, false)
+            activationMessage = "Impossibile programmare il collegamento"
             updateState()
         }
     }
 
     private fun stopConnection() {
         GallerySession.setEnabled(this, false)
-        GalleryResumeNotification.cancel(this)
+        GalleryDailySchedule.cancel(this)
         getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE).edit()
             .putBoolean("pending", false).apply()
-        stopService(Intent(this, TxService::class.java))
-        activationMessage = "Connessione interrotta"
+        activationMessage = "Collegamento periodico disattivato"
         updateState()
     }
 

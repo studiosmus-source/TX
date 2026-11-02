@@ -17,7 +17,17 @@ data class RemoteFile(
 )
 data class DirectoryPage(val entries: List<RemoteFile>, val hasMore: Boolean)
 
-class RxApi(private val credentials: Credentials) {
+class RxApi(private val credentials: Credentials, private val deviceId: String? = null) {
+    data class Device(val id: String, val name: String, val online: Boolean)
+
+    fun devices(): List<Device> {
+        val result = request("GET", "/v1/rx/devices")
+        val items = result.getJSONArray("devices")
+        return (0 until items.length()).map { i ->
+            val item = items.getJSONObject(i)
+            Device(item.getString("id"), item.getString("name"), item.getBoolean("online"))
+        }
+    }
     fun pending(): List<PendingPair> {
         val response = request("GET", "/v1/pair/pending")
         val items = response.getJSONArray("requests")
@@ -27,11 +37,12 @@ class RxApi(private val credentials: Credentials) {
         }
     }
 
-    fun approve(id: String) {
+    fun approve(id: String): Device {
         require(ID.matches(id)) { "ID non valido" }
         val result = request("POST", "/v1/pair/approve/" + id,
             JSONObject().put("txToken", credentials.txToken))
         check(result.optBoolean("approved")) { "Attivazione non confermata" }
+        return Device(result.getString("deviceId"), result.getString("name"), false)
     }
 
     data class GalleryItem(
@@ -102,7 +113,9 @@ class RxApi(private val credentials: Credentials) {
     }
 
     private fun call(operation: JSONObject): JSONObject {
-        val job = request("POST", "/v1/rx/request", operation)
+        val target = deviceId ?: throw IOException("Seleziona un telefono GALLERY")
+        require(ID.matches(target)) { "Telefono non valido" }
+        val job = request("POST", "/v1/rx/request", operation.put("deviceId", target))
         val id = job.getString("id")
         require(ID.matches(id)) { "ID richiesta non valido" }
         repeat(6) {
@@ -140,6 +153,7 @@ class RxApi(private val credentials: Credentials) {
                 throw IOException(when (code) {
                     401 -> "Chiave RX non valida"
                     403 -> "Autorizzazione negata"
+                    409 -> "Telefono GALLERY non collegato"
                     404, 410 -> "Richiesta scaduta, riprova"
                     429 -> "Server occupato, riprova"
                     else -> "Errore server HTTP " + code
