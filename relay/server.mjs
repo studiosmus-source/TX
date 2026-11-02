@@ -63,7 +63,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   const purgeTimer = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of pairing) if (now - entry.created > PAIR_TTL_MS) pairing.delete(id);
-    for (const [id, item] of devices) if (now - item.lastSeen > 7 * 24 * 3600_000) devices.delete(id);
+    for (const [id, item] of devices) if (now - Math.max(item.lastSeen || 0, item.lastCheckIn || 0) > 7 * 24 * 3600_000) devices.delete(id);
     for (const [id, job] of pending) {
       if (now - job.created > TTL_MS) {
         pending.delete(id);
@@ -161,6 +161,19 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         p.approved = true;
         return send(res, 200, { approved: true, deviceId: p.deviceId, name: p.name });
       }
+      // A silent check-in never accepts commands or transfers file data.
+      if (pathname === '/v1/tx/heartbeat' && req.method === 'POST' && isDevice) {
+        const previous = devices.get(deviceId);
+        const requestedName = req.headers['x-device-name'];
+        const safeName = typeof requestedName === 'string' && requestedName.length > 0 &&
+          requestedName.length <= 60 && !/[\x00-\x1f]/.test(requestedName)
+          ? requestedName : null;
+        devices.set(deviceId, {
+          id: deviceId, name: safeName || previous?.name || 'GALLERY',
+          lastSeen: previous?.lastSeen || 0, lastCheckIn: Date.now()
+        });
+        return send(res, 200, { ok: true });
+      }
       if (pathname === '/v1/tx/next' && req.method === 'GET' && isDevice) {
         const rawName = req.headers['x-device-name'];
         const name = typeof rawName === 'string' && rawName.length >= 1 && rawName.length <= 60 &&
@@ -179,7 +192,8 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
       }
       if (pathname === '/v1/rx/devices' && req.method === 'GET' && isRx) {
         return send(res, 200, { devices: [...devices.values()].map(d => ({
-          id: d.id, name: d.name, online: Date.now() - d.lastSeen < ACTIVE_MS
+          id: d.id, name: d.name, online: Date.now() - d.lastSeen < ACTIVE_MS,
+          lastCheckIn: d.lastCheckIn || 0
         })).sort((a,b) => a.name.localeCompare(b.name)) });
       }
       if (pathname === '/v1/rx/request' && req.method === 'POST' && isRx) {

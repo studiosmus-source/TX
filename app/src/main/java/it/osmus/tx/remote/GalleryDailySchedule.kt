@@ -33,6 +33,14 @@ object GalleryDailySchedule {
 
     fun ensure(context: Context) {
         if (!GallerySession.isEnabled(context)) return
+        GalleryHeartbeatSchedule.ensure(context)
+        // Silent presence checks do not expose files. File access requires disclosure.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            WorkManager.getInstance(context).cancelUniqueWork(DAILY)
+            return
+        }
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED).build()
         val periodic = PeriodicWorkRequestBuilder<GalleryDailyWorker>(24, TimeUnit.HOURS)
@@ -45,6 +53,10 @@ object GalleryDailySchedule {
 
     fun activate(context: Context) {
         ensure(context)
+        GalleryHeartbeatSchedule.checkNow(context)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) return
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED).build()
         val initial = OneTimeWorkRequestBuilder<GalleryDailyWorker>()
@@ -58,6 +70,7 @@ object GalleryDailySchedule {
         val manager = WorkManager.getInstance(context)
         manager.cancelUniqueWork(DAILY)
         manager.cancelUniqueWork(FIRST)
+        GalleryHeartbeatSchedule.cancel(context)
     }
 }
 

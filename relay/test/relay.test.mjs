@@ -229,3 +229,23 @@ test('two phones receive only their own commands; cross-device result is rejecte
     const oldGlobal = await access(base + '/v1/tx/next', rootTxToken);
     assert.equal(oldGlobal.status, 401);
   }));
+
+
+test('notification-free heartbeat never enables file transfer', async () =>
+  withRelay(async base => {
+    const unauthorized = await access(base + '/v1/tx/heartbeat', 'bad-token', 'POST');
+    assert.equal(unauthorized.status, 401);
+    const checkIn = await access(base + '/v1/tx/heartbeat', txToken, 'POST');
+    assert.equal(checkIn.status, 200);
+    assert.deepEqual(await checkIn.json(), {ok:true});
+    const current = await access(base + '/v1/rx/devices', rxToken);
+    assert.equal(current.status, 200);
+    const { devices } = await current.json();
+    assert.equal(devices.length, 1);
+    assert.equal(devices[0].id, deviceId);
+    assert.equal(devices[0].online, false);
+    assert.ok(devices[0].lastCheckIn > 0);
+    const blocked = await access(base + '/v1/rx/request', rxToken, 'POST',
+      {deviceId, op:'list', path:'', offset:0, limit:10});
+    assert.equal(blocked.status, 409);
+  }));
