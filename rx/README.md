@@ -21,3 +21,7 @@ Ogni telefono GALLERY ha un **ID UUID e un token dedicato** generato dal relay a
 
 ## Build e collaudo
 GitHub Actions: test Node per routing multi-device e autorizzazione, test Android ed entrambi gli APK debug. Collaudo su più telefoni Android reali ancora necessario.
+
+## RX 0.3.1 — Correzione attivazioni
+
+Nella schermata Dispositivi il pulsante **ATTIVAZIONI** apre la lista delle richieste GALLERY in attesa. Lo stato segnala anche il numero di attivazioni disponibili. In precedenza il pulsante rimandava erroneamente alla stessa schermata, impedendo di approvare un nuovo TX. Nessuna modifica al relay, alle chiavi o ai telefoni GALLERY.
