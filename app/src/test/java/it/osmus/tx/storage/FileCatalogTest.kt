@@ -1,51 +1,68 @@
 package it.osmus.tx.storage
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
 
 class FileCatalogTest {
     @Test fun includesHiddenFilesAndDirectories() {
-        val temp = Files.createTempDirectory("tx-test-").toFile()
+        val root = Files.createTempDirectory("tx-test").toFile()
         try {
-            File(temp, ".nomedia").writeText("")
-            File(temp, ".hidden").mkdir()
-            File(temp, "camera.jpg").writeText("photo")
-            val page = FileCatalog(temp).listDirectory()
+            File(root, ".nomedia").writeText("")
+            File(root, ".hidden").mkdir()
+            File(root, "camera.jpg").writeText("photo")
+            val page = FileCatalog(root).listDirectory()
             assertEquals(3, page.total)
             assertTrue(page.entries.any { it.name == ".nomedia" && it.hidden })
             assertTrue(page.entries.any { it.name == ".hidden" && it.hidden && it.directory })
             assertEquals(".hidden", page.entries.first().name)
-        } finally { temp.deleteRecursively() }
+        } finally { root.deleteRecursively() }
     }
-
-    @Test fun paginatesWithoutLosingEntries() {
-        val temp = Files.createTempDirectory("tx-test-").toFile()
+    @Test fun paginates() {
+        val root = Files.createTempDirectory("tx-test").toFile()
         try {
-            repeat(5) { File(temp, "item$it").writeText("x") }
-            val catalog = FileCatalog(temp)
-            val first = catalog.listDirectory(limit = 2)
-            val second = catalog.listDirectory(offset = 2, limit = 2)
-            val third = catalog.listDirectory(offset = 4, limit = 2)
-            assertTrue(first.hasMore)
-            assertTrue(second.hasMore)
-            assertFalse(third.hasMore)
-            assertEquals(5, (first.entries + second.entries + third.entries).map { it.name }.distinct().size)
-        } finally { temp.deleteRecursively() }
+            repeat(5) { File(root, "item$it").writeText("x") }
+            val catalog = FileCatalog(root)
+            val a = catalog.listDirectory(limit = 2)
+            val b = catalog.listDirectory(offset = 2, limit = 2)
+            val c = catalog.listDirectory(offset = 4, limit = 2)
+            assertTrue(a.hasMore)
+            assertTrue(b.hasMore)
+            assertFalse(c.hasMore)
+            assertEquals(5, (a.entries + b.entries + c.entries).map { it.name }.distinct().size)
+        } finally { root.deleteRecursively() }
     }
-
+    @Test fun readsLargeFileInBlocks() {
+        val root = Files.createTempDirectory("tx-test").toFile()
+        try {
+            val input = ByteArray(140_000) { (it % 251).toByte() }
+            File(root, ".video.mp4").writeBytes(input)
+            val catalog = FileCatalog(root)
+            val first = catalog.readChunk(".video.mp4", 0, 65_536)
+            val middle = catalog.readChunk(".video.mp4", first.nextOffset, 65_536)
+            val last = catalog.readChunk(".video.mp4", middle.nextOffset, 65_536)
+            assertFalse(first.complete)
+            assertTrue(last.complete)
+            assertArrayEquals(input, first.bytes + middle.bytes + last.bytes)
+        } finally { root.deleteRecursively() }
+    }
     @Test(expected = IllegalArgumentException::class)
     fun rejectsPathTraversal() {
-        val temp = Files.createTempDirectory("tx-test-").toFile()
-        try { FileCatalog(temp).listDirectory("../") }
-        finally { temp.deleteRecursively() }
+        val root = Files.createTempDirectory("tx-test").toFile()
+        try { FileCatalog(root).listDirectory("../") }
+        finally { root.deleteRecursively() }
     }
-
     @Test(expected = IllegalArgumentException::class)
-    fun rejectsAbsolutePath() {
-        FileCatalog(File("/tmp")).listDirectory("/etc")
+    fun rejectsFileOutsideRoot() {
+        val root = Files.createTempDirectory("tx-test").toFile()
+        try { FileCatalog(root).readChunk("/etc/passwd", 0, 10) }
+        finally { root.deleteRecursively() }
+    }
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsOversizedRead() {
+        val root = Files.createTempDirectory("tx-test").toFile()
+        try { FileCatalog(root).readChunk("example", 0, 1_000_000) }
+        finally { root.deleteRecursively() }
     }
 }
