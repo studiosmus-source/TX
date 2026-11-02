@@ -27,5 +27,13 @@ class BootReceiver : BroadcastReceiver() {
         if (!Environment.isExternalStorageManager()) return
         if (SecureRelaySettings.load(context) == null) return
         GalleryDailySchedule.ensure(context)
+        // Android 15+ prohibits launching dataSync foreground services at boot.
+        // On older Android versions, resume the previously owner-approved service.
+        if (android.os.Build.VERSION.SDK_INT < 35 &&
+            GalleryAccess.canShowRemoteDisclosure(context)) {
+            runCatching {
+                context.startForegroundService(Intent(context, TxService::class.java))
+            }
+        }
     }
 }
