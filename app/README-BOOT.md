@@ -1,22 +1,11 @@
-# GALLERY 0.5 — multi telefono e collegamento quotidiano
+# GALLERY 0.5.1 — controlli periodici senza notifiche
 
-Dopo un'approvazione esplicita per **ogni telefono GALLERY**, RX mostra i dispositivi separatamente. Ogni GALLERY usa un identificativo UUID e un token distinto; non riceve la chiave principale di amministrazione.
+Flusso di attivazione: installare, concedere l'accesso ai file, verificare che il codice sullo schermo GALLERY coincida con quello della richiesta su RX e approvare da RX. Non è previsto un ulteriore pulsante «Avvia» su TX dopo l'approvazione; l'app sposta la schermata in background automaticamente.
 
-## Attivazione
-1. Installare GALLERY 0.5 su ciascun telefono e RX 0.3 sul telefono ricevitore.
-2. In GALLERY, concedere accesso ai file e alle notifiche e confrontare il codice mostrato con quello in RX.
-3. Approvare il codice su RX. GALLERY programma una verifica quotidiana tramite WorkManager, anche dopo i riavvii. Le vecchie chiavi GALLERY 0.4.x richiedono una nuova approvazione.
-4. In RX scegliere il telefono nella pagina **Dispositivi**. Ogni galleria o download è associato esclusivamente al dispositivo scelto.
-5. Sul telefono GALLERY il pulsante **Disattiva collegamento** annulla tutte le attività automatiche.
+La nuova attività \`GalleryHeartbeatWorker\` effettua un check-in HTTPS quotidiano, senza trasferire file, senza chiedere il permesso notifiche e senza creare notifiche. La pianificazione WorkManager persiste dopo i riavvii, ma non garantisce esecuzioni a orari esatti. Sul relay \`POST /v1/tx/heartbeat\` aggiorna solo l'ultimo check-in del dispositivo: **non lo rende online per richieste di file** e rifiuta chiavi non valide.
 
-## Comportamento e limiti verificabili
-- All'attivazione viene programmata una prima finestra di connessione. Una nuova finestra di **circa 4 minuti** è programmata **ogni 24 ore**, quando Android consente l'esecuzione e Internet è disponibile.
-- WorkManager persiste i lavori dopo riavvio, ma Android 15/16, Doze, risparmio batteria e le restrizioni dei produttori possono ritardare o sopprimere una finestra; nessuna garanzia entro 24 ore esatte.
-- RX può trasferire i file **soltanto mentre il dispositivo scelto è online**. I file non sono caricati sul server e non esiste una coda persistente per trasferimenti rinviati.
-- Durante ogni finestra, GALLERY pubblica una notifica di collegamento autorizzato; se l'accesso alle notifiche non è concesso, la sincronizzazione automatica non viene avviata. La disattivazione esplicita rimane disponibile.
-- Il server su Render mantiene in RAM l'elenco dei dispositivi momentaneamente collegati. Dopo un riavvio i dispositivi si ripresentano al prossimo controllo; RX conserva sul dispositivo gli ID già approvati.
-- La disponibilità immediata da RX in qualunque momento **non è garantita**. I dispositivi mostrati offline non rispondono a richieste remote.
-- Le chiavi restano protette con Android Keystore. Le comunicazioni usano HTTPS; il relay legge i contenuti in memoria durante il trasferimento, senza cifratura end-to-end.
-- Il server deriva la chiave del dispositivo dalla chiave principale e dal suo ID, per cui una modifica di TX_TOKEN richiede una nuova approvazione. La revoca selettiva permanente non è ancora implementata.
+Il trasferimento remoto vero e proprio resta separato. GALLERY mantiene una notifica durante le finestre in cui i file del telefono possono essere consultati. Se il permesso notifiche non è stato accordato, il worker remoto non viene programmato e RX non può leggere galleria o file; può vedere il telefono registrato come non collegato. Le autorizzazioni per la memoria restano revocabili dalle impostazioni Android. Un nuovo TX non può essere approvato senza confrontare il codice visualizzato sul telefono d'origine.
 
-Collaudo necessario: almeno due telefoni GALLERY e un RX, prove di approvazione, isolamento delle richieste e dei file, conferma che ogni download provenga dal telefono selezionato, riavvio Android 16, intervallo giornaliero, risparmio batteria, perdita Internet, disattivazione e notifica. Il successo di CI non dimostra che tutte le condizioni Android siano soddisfatte.
+L'app GALLERY continua a essere installata e visibile nell'elenco delle applicazioni, anche dopo che la sua schermata è stata spostata in background. Il comando di disattivazione nell'app annulla sia check-in sia accesso remoto.
+
+Verifica automatica: test Node per autenticazione heartbeat, mancata abilitazione del trasferimento file, isolamento multi-TX; test/build Android. Collaudo dispositivo reale e reboot resta necessario.
