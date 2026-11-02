@@ -1,11 +1,15 @@
 import http from 'node:http';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const MAX_REQUEST_BYTES = 4096;
 const MAX_RESULT_BYTES = 160_000;
 const MAX_PENDING = 16;
 const TTL_MS = 120_000;
+const PAIR_TTL_MS = 600_000;
+const MAX_PAIR_REQUESTS = 4;
+const MAX_PAIR_PER_MINUTE = 8;
 
 function equalsToken(a, b) {
   const hash = x => createHash('sha256').update(x).digest();
@@ -42,9 +46,15 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
     throw new Error('Configure two different random tokens (at least 32 chars each)');
   }
   const pending = new Map();
+  const pairing = new Map();
+  let pairWindowStart = Date.now();
+  let pairRequestsInWindow = 0;
+  const pairHtml = readFileSync(new URL('./pair.html', import.meta.url));
+  const pairJs = readFileSync(new URL('./pair.js', import.meta.url));
   const waitingTx = new Set();
   const purgeTimer = setInterval(() => {
     const now = Date.now();
+    for (const [id, entry] of pairing) if (now - entry.created > PAIR_TTL_MS) pairing.delete(id);
     for (const [id, job] of pending) {
       if (now - job.created > TTL_MS) {
         pending.delete(id);
@@ -78,16 +88,67 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url || '/', 'http://relay.local').pathname;
     if (pathname === '/health' && req.method === 'GET') return send(res, 200, { status: 'ok' });
-    // When deployed behind Render/another managed TLS reverse proxy, it must SET
-    // and overwrite x-forwarded-proto. Do not expose the raw HTTP port publicly.
+    // The managed reverse proxy must overwrite x-forwarded-proto.
     if (requireTls && !req.socket.encrypted && req.headers['x-forwarded-proto'] !== 'https') return send(res, 403, { error: 'https_required' });
+    // The enrollment page contains no secrets. The JSON APIs require RX credentials.
+    if (pathname === '/pair' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'unsafe-inline'", 'X-Content-Type-Options': 'nosniff' });
+      return res.end(pairHtml);
+    }
+    if (pathname === '/pair.js' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(pairJs);
+    }
     const auth = req.headers.authorization || '';
     const role = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : '';
     const isTx = equalsToken(role, txToken);
     const isRx = equalsToken(role, rxToken);
-    if (!isTx && !isRx) return send(res, 401, { error: 'unauthorized' });
+    if (!isTx && !isRx && pathname !== '/v1/pair/request' && pathname !== '/v1/pair/poll')
+      return send(res, 401, { error: 'unauthorized' });
 
     try {
+      // A new TX cannot access files until RX approves its one-time enrollment request.
+      if (pathname === '/v1/pair/request' && req.method === 'POST') {
+        const now = Date.now();
+        if (now - pairWindowStart > 60_000) { pairWindowStart = now; pairRequestsInWindow = 0; }
+        if (++pairRequestsInWindow > MAX_PAIR_PER_MINUTE || pairing.size >= MAX_PAIR_REQUESTS)
+          return send(res, 429, { error: 'too_many_requests' });
+        const obj = await receive(req, MAX_REQUEST_BYTES);
+        if (!obj || typeof obj.name !== 'string' || obj.name.length < 1 || obj.name.length > 60 || /[\x00-\x1f]/.test(obj.name))
+          return send(res, 400, { error: 'invalid_request' });
+        const id = randomUUID();
+        const claim = randomBytes(32).toString('hex');
+        const code = String(randomBytes(4).readUInt32BE() % 1_000_000).padStart(6, '0');
+        pairing.set(id, { id, claimHash: createHash('sha256').update(claim).digest('hex'),
+          code, name: obj.name, created: now, approved: false });
+        return send(res, 201, { id, claim, code, expiresInSeconds: PAIR_TTL_MS / 1000 });
+      }
+      if (pathname === '/v1/pair/poll' && req.method === 'POST') {
+        const obj = await receive(req, MAX_REQUEST_BYTES);
+        const p = pairing.get(obj?.id);
+        if (!p || typeof obj?.claim !== 'string' ||
+            !equalsToken(createHash('sha256').update(obj.claim).digest('hex'), p.claimHash))
+          return send(res, 404, { error: 'not_found' });
+        if (Date.now() - p.created > PAIR_TTL_MS) { pairing.delete(p.id); return send(res, 410, { error: 'expired' }); }
+        if (!p.approved) return send(res, 202, { pending: true });
+        pairing.delete(p.id);
+        return send(res, 200, { approved: true, txToken });
+      }
+      if (pathname === '/v1/pair/pending' && req.method === 'GET' && isRx) {
+        return send(res, 200, { requests: [...pairing.values()].filter(p=>!p.approved)
+          .map(p=>({id:p.id, name:p.name, code:p.code, created:p.created})) });
+      }
+      const pairApprove = /^\/v1\/pair\/approve\/([0-9a-f-]{36})$/.exec(pathname);
+      if (pairApprove && req.method === 'POST' && isRx) {
+        const p = pairing.get(pairApprove[1]);
+        if (!p || p.approved || Date.now()-p.created > PAIR_TTL_MS) return send(res, 404, {error:'not_found'});
+        const obj = await receive(req, MAX_REQUEST_BYTES);
+        if (!obj || typeof obj.txToken !== 'string' || !equalsToken(obj.txToken, txToken))
+          return send(res, 403, { error: 'invalid_tx_key' });
+        p.approved = true;
+        return send(res, 200, { approved: true });
+      }
       if (pathname === '/v1/tx/next' && req.method === 'GET' && isTx) {
         const available = nextCommand();
         if (available) return send(res, 200, available);
@@ -153,7 +214,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
     clearInterval(purgeTimer);
     for (const waiter of waitingTx) { clearTimeout(waiter.timer); send(waiter.res, 503, { error: 'shutdown' }); }
     for (const job of pending.values()) for (const response of job.waitingRx) send(response, 503, { error: 'shutdown' });
-    waitingTx.clear(); pending.clear();
+    waitingTx.clear(); pending.clear(); pairing.clear();
   });
   return server;
 }
