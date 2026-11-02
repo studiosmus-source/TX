@@ -28,7 +28,9 @@ import java.io.IOException
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    private val worker = Executors.newSingleThreadExecutor()
+    // Keep pairing responsive even when a gallery request is waiting on TX.
+    private val pairWorker = Executors.newSingleThreadExecutor()
+    private val ioWorker = Executors.newSingleThreadExecutor()
     private val thumbs = Executors.newFixedThreadPool(2)
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
@@ -86,7 +88,10 @@ class MainActivity : Activity() {
                 if (mode == 3) nextGalleryPage() else nextPage()
             }
         }
-        if (RxSecrets.load(this) == null) setup() else gallery()
+        if (RxSecrets.load(this) == null) setup()
+        else if (getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE)
+                .getBoolean("approved", false)) gallery()
+        else requests()
     }
 
     override fun onResume() {
@@ -104,7 +109,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         cancelled = true
         handler.removeCallbacks(autoRefresh)
-        worker.shutdownNow()
+        pairWorker.shutdownNow()
+        ioWorker.shutdownNow()
         thumbs.shutdownNow()
         super.onDestroy()
     }
@@ -124,11 +130,13 @@ class MainActivity : Activity() {
             val c = runCatching { Credentials(rx.text.toString().trim(), tx.text.toString().trim()) }
                 .getOrElse { status.text = "Chiavi non valide"; return@button }
             status.text = "Verifica…"
-            worker.execute {
+            pairWorker.execute {
                 try {
                     RxApi(c).pending()
                     RxSecrets.save(applicationContext, c)
-                    ui { gallery() }
+                    getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE).edit()
+                        .putBoolean("approved", false).apply()
+                    ui { requests() }
                 } catch (e: Exception) { ui { status.text = safeError(e) } }
             }
         })
@@ -138,7 +146,7 @@ class MainActivity : Activity() {
         mode = 1
         generation++
         content.removeAllViews()
-        status.text = "Attivazioni TX"
+        status.text = "Attivazioni"
         val nav = horizontal()
         nav.addView(button("GALLERIA") { gallery() }, LinearLayout.LayoutParams(0, dp(52), 1f))
         nav.addView(spaceWidth(8))
@@ -154,6 +162,8 @@ class MainActivity : Activity() {
                 .setNegativeButton("Annulla", null)
                 .setPositiveButton("CANCELLA") { _, _ ->
                     RxSecrets.clear(this)
+                    getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE).edit()
+                        .remove("approved").apply()
                     setup()
                 }.show()
         })
@@ -169,15 +179,19 @@ class MainActivity : Activity() {
     private fun refreshRequests() {
         if (mode != 1) return
         val c = RxSecrets.load(this) ?: return setup()
-        worker.execute {
+        pairWorker.execute {
             try {
                 val pending = RxApi(c).pending()
                 ui {
                     if (mode != 1) return@ui
                     val list = content.findViewWithTag<LinearLayout>("pairs") ?: return@ui
                     list.removeAllViews()
-                    status.text = if (pending.isEmpty()) "Nessuna richiesta" else
-                        "Richieste: " + pending.size
+                    status.text = when {
+                        pending.isNotEmpty() -> "Richieste: " + pending.size
+                        getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE)
+                            .getBoolean("approved", false) -> "✓ Approvazione inviata"
+                        else -> "In attesa della richiesta GALLERY"
+                    }
                     for (item in pending) {
                         val card = LinearLayout(this).apply {
                             orientation = LinearLayout.VERTICAL
@@ -207,10 +221,12 @@ class MainActivity : Activity() {
             .setPositiveButton("APPROVA") { _, _ ->
                 val c = RxSecrets.load(this) ?: return@setPositiveButton
                 status.text = "Autorizzazione…"
-                worker.execute {
+                pairWorker.execute {
                     try {
                         RxApi(c).approve(item.id)
-                        ui { if (mode == 1) { status.text = "Autorizzato"; refreshRequests() } }
+                        getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE).edit()
+                            .putBoolean("approved", true).apply()
+                        ui { if (mode == 1) { status.text = "✓ Approvazione inviata"; refreshRequests() } }
                     } catch (e: Exception) { ui { status.text = safeError(e) } }
                 }
             }.show()
@@ -251,7 +267,7 @@ class MainActivity : Activity() {
         val start = galleryOffset
         loading = true
         status.text = "Galleria · Caricamento…"
-        worker.execute {
+        ioWorker.execute {
             try {
                 val page = RxApi(credentials).gallery(start)
                 ui {
@@ -380,7 +396,7 @@ class MainActivity : Activity() {
         val start = offset
         loading = true
         status.text = "Caricamento…"
-        worker.execute {
+        ioWorker.execute {
             try {
                 val page = RxApi(c).list(path, start)
                 ui {
@@ -462,7 +478,7 @@ class MainActivity : Activity() {
         status.text = "Download: " + file.name
         val cancel = button("ANNULLA DOWNLOAD", true) { cancelled = true }
         content.addView(cancel)
-        worker.execute {
+        ioWorker.execute {
             var finished = false
             try {
                 contentResolver.openOutputStream(destination, "w").use { output ->
