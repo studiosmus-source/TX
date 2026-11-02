@@ -186,7 +186,7 @@ class MainActivity : Activity() {
                 .putBoolean("pending", false).apply()
             activationMessage = "Connessione in avvio"
             updateState()
-            if (backgroundAfterStart) moveTaskToBack(true)
+            if (backgroundAfterStart) finishAndRemoveTask()
         } catch (_: Exception) {
             activationMessage = "Impossibile avviare il collegamento"
             updateState()
