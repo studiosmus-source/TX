@@ -35,7 +35,7 @@ class TxService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val config = RelaySettings.load(this) ?: run { stopSelf(); return START_NOT_STICKY }
+        val config = SecureRelaySettings.load(this) ?: run { stopSelf(); return START_NOT_STICKY }
         val notificationIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

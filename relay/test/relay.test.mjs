@@ -74,3 +74,67 @@ test('TX result endpoint rejects RX credentials and malformed answers', async ()
   const result = await access(base + '/v1/tx/result/' + id, txToken, 'POST', { ok: true, entries: [], total: 0, hasMore: false });
   assert.equal(result.status, 200);
 }));
+
+test('a transmitter receives its TX key only after RX approves its enrollment', async () => withRelay(async base => {
+  const init = await fetch(base + '/v1/pair/request', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Test TX phone' }),
+  });
+  assert.equal(init.status, 201);
+  const { id, claim, code } = await init.json();
+  assert.equal(code.length, 6);
+  const poll = async (secret) => fetch(base + '/v1/pair/poll', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, claim: secret }),
+  });
+  let res = await poll(claim);
+  assert.equal(res.status, 202);
+  assert.deepEqual(await res.json(), { pending: true });
+  res = await poll('wrong-claim');
+  assert.equal(res.status, 404);
+  res = await access(base + '/v1/pair/pending', txToken);
+  assert.equal(res.status, 404);
+  res = await access(base + '/v1/pair/pending', rxToken);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).requests[0].code, code);
+  res = await access(base + '/v1/pair/approve/' + id, rxToken, 'POST', { txToken: 'wrong-tx-token' });
+  assert.equal(res.status, 403);
+  res = await access(base + '/v1/pair/approve/' + id, txToken, 'POST', { txToken });
+  assert.equal(res.status, 404);
+  res = await access(base + '/v1/pair/approve/' + id, rxToken, 'POST', { txToken });
+  assert.equal(res.status, 200);
+  res = await poll(claim);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).txToken, txToken);
+  res = await poll(claim);
+  assert.equal(res.status, 404);
+}));
+
+test('pairing limits and invalid device names are enforced', async () => withRelay(async base => {
+  let res = await fetch(base + '/v1/pair/request', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'bad\nname' }),
+  });
+  assert.equal(res.status, 400);
+  for (let i = 0; i < 3; i++) {
+    res = await fetch(base + '/v1/pair/request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Another TX' }),
+    });
+    assert.equal(res.status, 201);
+  }
+  res = await access(base + '/v1/pair/pending', rxToken);
+  assert.equal((await res.json()).requests.length, 3);
+}));
+
+test('HTTPS restriction also covers pairing and its browser page', async () => {
+  const relay = createRelay({ txToken, rxToken, requireTls: true });
+  await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
+  try {
+    const base = `http://127.0.0.1:${relay.address().port}`;
+    const page = await fetch(base + '/pair');
+    assert.equal(page.status, 403);
+    const request = await fetch(base + '/v1/pair/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test device' }) });
+    assert.equal(request.status, 403);
+  } finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
+});
