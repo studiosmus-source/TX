@@ -75,7 +75,7 @@ class MainActivity : Activity() {
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(content)
         scroller.setOnScrollChangeListener { v, _, _, _, _ ->
-            val child = v.getChildAt(0)
+            val child = scroller.getChildAt(0)
             if (mode == 2 && hasMore && !loading && !downloading &&
                 child != null && v.scrollY + v.height >= child.height - dp(230)) {
                 nextPage()
