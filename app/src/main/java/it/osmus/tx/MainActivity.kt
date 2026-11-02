@@ -76,8 +76,7 @@ class MainActivity : Activity() {
             addView(column)
             setContentView(this)
         }
-        column.addView(text("TX", 36f, Color.WHITE, true))
-        column.addView(text("TRASMITTENTE  •  V0.4", 12f, SKY, true))
+        column.addView(text("GALLERY", 36f, Color.WHITE, true))
         column.addView(space(24))
         column.addView(space(44))
         permissionStatus = text("", 15f, SILVER, true)
@@ -102,7 +101,7 @@ class MainActivity : Activity() {
 
     private fun beginEnrollmentIfNeeded() {
         if (enrollmentThread?.isAlive == true || isFinishing || isDestroyed) return
-        val name = (Build.MANUFACTURER + " " + Build.MODEL).trim().take(60).ifEmpty { "Telefono TX" }
+        val name = (Build.MANUFACTURER + " " + Build.MODEL).trim().take(60).ifEmpty { "GALLERY" }
         val client = EnrollmentClient(name)
         enrollment = client
         activationMessage = "Richiesta di attivazione…"
