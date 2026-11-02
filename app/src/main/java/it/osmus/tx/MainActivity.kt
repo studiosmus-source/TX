@@ -57,14 +57,16 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(11, 17, 30))
             setPadding(dp(24), dp(32), dp(24), dp(40))
         }
-        ScrollView(this).apply { addView(column); setContentView(this) }
+        ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(11, 17, 30))
+            isFillViewport = true
+            addView(column)
+            setContentView(this)
+        }
         column.addView(text("TX", 36f, Color.WHITE, true))
-        column.addView(text("TRASMITTENTE  •  V0.3", 12f, SKY, true))
+        column.addView(text("TRASMITTENTE  •  V0.3.1", 12f, SKY, true))
         column.addView(space(24))
-        column.addView(text("Accesso ai file", 23f, Color.WHITE, true))
-        column.addView(space(8))
-        column.addView(text("TX permette al dispositivo RX autorizzato di consultare da remoto i file accessibili, inclusi quelli nascosti.", 15f, SILVER))
-        column.addView(space(16))
+        column.addView(space(44))
         permissionStatus = text("", 15f, SILVER, true)
         column.addView(permissionStatus)
         permissionButton = Button(this).apply {
@@ -73,11 +75,7 @@ class MainActivity : Activity() {
             setOnClickListener { openPermissionSettings() }
         }
         column.addView(permissionButton)
-        column.addView(space(24))
-        column.addView(text("Attivazione remota", 23f, Color.WHITE, true))
-        column.addView(space(8))
-        column.addView(text("Dopo il permesso, TX invia una richiesta di attivazione. La chiave viene inserita e approvata dal tuo dispositivo RX, senza digitarla qui.", 14f, SILVER))
-        column.addView(space(16))
+        column.addView(space(28))
         activationStatus = text("", 15f, SKY)
         column.addView(activationStatus)
         column.addView(space(20))
@@ -87,8 +85,6 @@ class MainActivity : Activity() {
             setOnClickListener { if (TxService.active) stopConnection() else startConnection() }
         }
         column.addView(actionButton)
-        column.addView(space(20))
-        column.addView(text("La condivisione è segnalata da Android e può essere interrotta. Android limita i servizi di trasferimento in background.", 12f, GREY))
     }
 
     private fun beginEnrollmentIfNeeded() {
@@ -96,14 +92,14 @@ class MainActivity : Activity() {
         val name = (Build.MANUFACTURER + " " + Build.MODEL).trim().take(60).ifEmpty { "Telefono TX" }
         val client = EnrollmentClient(name)
         enrollment = client
-        activationMessage = "Invio richiesta di attivazione…"
+        activationMessage = "Richiesta di attivazione…"
         updateState()
         enrollmentThread = thread(name = "tx-enrollment") {
             client.run(
-                onCode = { code -> showMessage("Richiesta inviata · codice: $code\nIn attesa della tua approvazione da RX…") },
+                onCode = { code -> showMessage("Codice: $code\nIn attesa di approvazione") },
                 onReady = { token ->
                     val saved = runCatching { SecureRelaySettings.save(applicationContext, token) }.isSuccess
-                    showMessage(if (saved) "✓ Attivazione ricevuta. Premi SALVA E AVVIA." else "Salvataggio sicuro non riuscito.")
+                    showMessage(if (saved) "✓ Pronto" else "Salvataggio sicuro non riuscito.")
                 },
                 onError = { showMessage(it) }
             )
@@ -121,17 +117,19 @@ class MainActivity : Activity() {
 
     private fun updateState() {
         val hasPermission = Environment.isExternalStorageManager()
-        permissionStatus.text = if (hasPermission) "✓ Accesso ai file consentito" else "• Permesso Android necessario"
+        permissionStatus.text = if (hasPermission) "✓ Accesso consentito" else ""
         permissionStatus.setTextColor(if (hasPermission) GREEN else AMBER)
+        permissionStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
         permissionButton.visibility = if (hasPermission) View.GONE else View.VISIBLE
         val activated = SecureRelaySettings.load(this) != null
         actionButton.text = if (TxService.active) "INTERROMPI CONNESSIONE" else "SALVA E AVVIA"
         actionButton.isEnabled = TxService.active || (hasPermission && activated)
+        activationStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
         activationStatus.text = when {
             TxService.active -> TxService.connectionStatus
-            activated -> "✓ Attivazione completata. Premi SALVA E AVVIA."
-            !hasPermission -> "In attesa del permesso per iniziare l'attivazione."
-            else -> activationMessage.ifBlank { "Richiesta in preparazione…" }
+            activated -> "✓ Pronto"
+            !hasPermission -> ""
+            else -> activationMessage.ifBlank { "Attivazione in corso…" }
         }
     }
 
@@ -170,7 +168,6 @@ class MainActivity : Activity() {
     companion object {
         private val SKY = Color.rgb(116, 192, 238)
         private val SILVER = Color.rgb(196, 204, 217)
-        private val GREY = Color.rgb(152, 164, 182)
         private val GREEN = Color.rgb(102, 224, 163)
         private val AMBER = Color.rgb(255, 193, 119)
     }
