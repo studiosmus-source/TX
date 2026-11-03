@@ -51,6 +51,9 @@ class RxApi(private val credentials: Credentials) {
         val marker = if (hiddenByNomedia) ".nomedia" else ""
         val result = call(JSONObject().put("op", "gallery").put("path", marker)
             .put("offset", offset).put("limit", limit))
+        if (hiddenByNomedia && !result.optBoolean("nomedia", false)) {
+            throw IOException("NASCOSTI richiede l'aggiornamento di GALLERY TX")
+        }
         val entries = result.getJSONArray("entries")
         return GalleryPage((0 until entries.length()).map { index ->
             val item = entries.getJSONObject(index)
