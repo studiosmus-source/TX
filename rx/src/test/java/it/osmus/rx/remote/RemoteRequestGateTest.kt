@@ -82,4 +82,27 @@ class RemoteRequestGateTest {
             pool.shutdownNow()
         }
     }
+
+    @Test fun thumbnailsPauseDuringTransferAndResumeAfterward() {
+        val reached = CountDownLatch(1)
+        val worker = Thread {
+            RemoteRequestGate.run(priority = false) { reached.countDown() }
+        }
+        RemoteRequestGate.setTransferActive(true)
+        try {
+            worker.start()
+            assertTrue(!reached.await(200, TimeUnit.MILLISECONDS))
+            assertEquals(200, RemoteRequestGate.run(priority = true) { 200 })
+        } finally {
+            RemoteRequestGate.setTransferActive(false)
+        }
+        try {
+            assertTrue(reached.await(3, TimeUnit.SECONDS))
+            worker.join(3_000)
+            assertTrue(!worker.isAlive)
+        } finally {
+            worker.interrupt()
+        }
+    }
+
 }
