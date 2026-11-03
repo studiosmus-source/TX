@@ -1,4 +1,4 @@
-# GALLERY RX 0.2.8
+# GALLERY RX 0.2.9
 
 RX riceve l'autorizzazione e visualizza i file del trasmittente TX.
 
@@ -11,6 +11,10 @@ RX riceve l'autorizzazione e visualizza i file del trasmittente TX.
 - L'esplorazione **FILE** mostra le aree accessibili della memoria condivisa di TX, ma non i dati riservati ad altre app o file definitivamente eliminati.
 
 RX 0.2.8 usa blocchi fino a 512 KiB con ritorno ai blocchi da 64 KiB quando necessario; sospende le miniature durante un download. Il server Render continua a usare HTTPS e credenziali distinte, senza modifiche al pairing.
+
+## Foto nascoste da .nomedia
+
+La scheda **NASCOSTI** su RX ricerca solo su richiesta foto e video in cartelle della memoria condivisa TX contrassegnate da un file `.nomedia`. La ricerca procede a blocchi e può richiedere più passaggi su grandi memorie, senza bloccare la normale GALLERIA. I contenuti trovati hanno anteprima e SALVA come gli altri; la scansione è in sola lettura. Serve **TX 0.4.11 o superiore**. Non vengono letti dati privati protetti dalle altre app né i contenuti della cassaforte OPPO.
 
 ## Limiti e test
 
