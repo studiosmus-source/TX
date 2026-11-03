@@ -54,18 +54,28 @@ class RemoteRequestGateTest {
                 }
             }
             assertTrue(active.await(5, TimeUnit.SECONDS))
-            val thumbnail = pool.submit {
+            val thumbnail = Thread {
                 RemoteRequestGate.run(priority = false) { order.add("thumb") }
             }
-            val download = pool.submit {
+            val download = Thread {
                 RemoteRequestGate.run(priority = true) { order.add("download") }
             }
-            // Let both waiting workers queue before releasing the gate.
-            Thread.sleep(100)
+            thumbnail.start()
+            download.start()
+            // Both workers must actually be waiting before releasing the lock.
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while ((thumbnail.state != Thread.State.WAITING ||
+                download.state != Thread.State.WAITING) &&
+                System.nanoTime() < deadline) {
+                Thread.sleep(10)
+            }
+            assertEquals(Thread.State.WAITING, thumbnail.state)
+            assertEquals(Thread.State.WAITING, download.state)
             release.countDown()
             first.get(5, TimeUnit.SECONDS)
-            thumbnail.get(5, TimeUnit.SECONDS)
-            download.get(5, TimeUnit.SECONDS)
+            thumbnail.join(5000)
+            download.join(5000)
+            assertTrue(!thumbnail.isAlive && !download.isAlive)
             assertEquals("download", order.first())
         } finally {
             release.countDown()
