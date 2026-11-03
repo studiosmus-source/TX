@@ -27,6 +27,7 @@ import it.osmus.rx.remote.Credentials
 import it.osmus.rx.remote.PendingPair
 import it.osmus.rx.remote.RemoteFile
 import it.osmus.rx.remote.RxApi
+import it.osmus.rx.remote.RemoteRequestGate
 import it.osmus.rx.remote.RxSecrets
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -525,6 +526,7 @@ class MainActivity : Activity() {
         if (downloading) return
         val credentials = RxSecrets.load(this) ?: return setup()
         downloading = true
+        RemoteRequestGate.setTransferActive(true)
         cancelled = false
         saveButton?.isEnabled = false
         status.text = "Download: " + file.name
@@ -636,6 +638,7 @@ class MainActivity : Activity() {
                         .show()
                 }
             } finally {
+                RemoteRequestGate.setTransferActive(false)
                 ui {
                     downloading = false
                     saveButton?.isEnabled = true
