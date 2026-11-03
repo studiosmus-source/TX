@@ -53,7 +53,6 @@ class TxService : Service() {
             .setCategory(Notification.CATEGORY_SERVICE)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .setSilent(true)
             .setOngoing(true)
             .setContentIntent(notificationIntent)
             .build()
