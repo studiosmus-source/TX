@@ -181,7 +181,7 @@ class RxApi(private val credentials: Credentials) {
                 while (true) {
                     val count = reader.read(chars)
                     if (count < 0) break
-                    if (output.length + count > 256_000) throw IOException("Risposta troppo grande")
+                    if (output.length + count > 800_000) throw IOException("Risposta troppo grande")
                     output.append(chars, 0, count)
                 }
                 output.toString()
