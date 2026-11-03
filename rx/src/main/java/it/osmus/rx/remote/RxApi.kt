@@ -64,7 +64,7 @@ class RxApi(private val credentials: Credentials) {
         val result = call(JSONObject().put("op", "preview").put("path", path)
             .put("offset", 0))
         val decoded = Base64.decode(result.getString("base64"), Base64.DEFAULT)
-        if (decoded.size > 100_000 || decoded.isEmpty()) throw IOException("Immagine non valida")
+        if (decoded.size > 110_000 || decoded.isEmpty()) throw IOException("Immagine non valida")
         return decoded
     }
 
