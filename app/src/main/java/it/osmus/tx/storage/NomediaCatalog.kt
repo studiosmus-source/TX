@@ -65,7 +65,8 @@ class NomediaCatalog(root: File) {
             val hidden = task.suppressed || files.any { it.isFile && it.name == ".nomedia" }
             for (entry in files) {
                 examined++
-                if (examined > MAX_ENTRIES || found.size >= MAX_RESULTS) {
+                if (examined > MAX_ENTRIES || found.size >= MAX_RESULTS ||
+                    System.nanoTime() - startNanos >= MAX_SCAN_NANOS) {
                     truncated = true
                     break
                 }
