@@ -1,6 +1,6 @@
 # GALLERY — TX + RX Android
 
-Versioni candidate: **TX 0.4.10** e **RX 0.2.8** (accoppiamento con un solo avvio).
+Versioni candidate: **TX 0.4.11** e **RX 0.2.9** (accoppiamento con un solo avvio).
 
 ## Flusso di autorizzazione
 
@@ -11,6 +11,10 @@ Versioni candidate: **TX 0.4.10** e **RX 0.2.8** (accoppiamento con un solo avvi
 5. Nei successivi avvii, se la credenziale TX è ancora salvata, **AVVIA** riparte senza nuovo pairing. Durante una sessione, l’unico pulsante nell’app TX è **TEST**: verifica lo stato del servizio e la raggiungibilità HTTPS senza fermare nulla. Per interrompere l’accesso remoto è disponibile il comando **DISATTIVA** nella notifica Android di GALLERY.
 
 Il polling dell'attivazione è gestito dal servizio TX, non dalla Activity. Errori di rete temporanei durante il polling conservano la stessa richiesta. Una nuova richiesta si crea soltanto dopo scadenza o invalidazione della precedente. Nessun accesso remoto è consentito prima dell'approvazione su RX.
+
+## Cartelle .nomedia
+
+La scheda **NASCOSTI** di RX cerca separatamente foto e video presenti in cartelle `.nomedia` accessibili nella memoria condivisa di TX. La ricerca è avviata esplicitamente da RX e non rallenta l'elenco normale basato su MediaStore. Il contenuto resta sul TX finché l'utente non seleziona SALVA. Le aree private Android e le casseforti protette non sono accessibili.
 
 ## Architettura e sicurezza
 
