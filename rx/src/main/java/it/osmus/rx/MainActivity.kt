@@ -551,6 +551,7 @@ class MainActivity : Activity() {
                 val writtenHash = java.security.MessageDigest.getInstance("SHA-256")
                 var received = 0L
                 var lastProgress = 0L
+                val downloadStartedMs = android.os.SystemClock.elapsedRealtime()
                 contentResolver.openOutputStream(target.uri, "wt").use { output ->
                     if (output == null) throw IOException("Destinazione non scrivibile")
                     while (true) {
