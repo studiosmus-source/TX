@@ -1,7 +1,7 @@
 name: Android TX and RX
 on:
   push:
-    branches: [main, fix/rx-026-verified-originals-20261103]
+    branches: [main]
   pull_request:
 
 jobs:
