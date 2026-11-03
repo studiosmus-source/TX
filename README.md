@@ -1,6 +1,6 @@
 # GALLERY — TX + RX Android
 
-Versioni candidate: **TX 0.4.8** e **RX 0.2.8** (accoppiamento con un solo avvio).
+Versioni candidate: **TX 0.4.10** e **RX 0.2.8** (accoppiamento con un solo avvio).
 
 ## Flusso di autorizzazione
 
