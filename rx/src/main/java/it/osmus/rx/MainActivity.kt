@@ -515,7 +515,11 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Write to a new Android MediaStore item and publish it only after readback verification. */
+    /**
+     * Download the original file, not the JPEG preview. Read a verified TX block
+     * before creating any MediaStore item (avoids broken empty photo placeholders).
+     * The file stays pending until its byte checksum AND image decoder both pass.
+     */
     private fun download(file: RemoteFile, previewMessage: TextView? = null,
                          saveButton: Button? = null) {
         if (downloading) return
@@ -524,7 +528,7 @@ class MainActivity : Activity() {
         cancelled = false
         saveButton?.isEnabled = false
         status.text = "Download: " + file.name
-        previewMessage?.text = "Download in corso…"
+        previewMessage?.text = "Connessione al file originale…"
         val cancel = button("ANNULLA DOWNLOAD", true) { cancelled = true }
         content.addView(cancel)
         val store = RxMediaStore(applicationContext.contentResolver)
@@ -532,80 +536,96 @@ class MainActivity : Activity() {
             var destination: RxMediaStore.Destination? = null
             var published = false
             try {
-                val outputDigest = java.security.MessageDigest.getInstance("SHA-256")
-                destination = store.create(file.name)
+                val api = RxApi(credentials)
+                // If the relay is busy or TX is unreachable, nothing is saved yet.
+                var chunk = api.read(file.path, 0L)
+                if (cancelled || Thread.currentThread().isInterrupted)
+                    throw IOException("Download annullato")
+                val sourceBytes = chunk.total
+                val actualName = if (RemoteNames.mimeType(file.name).startsWith("image/")) {
+                    ImageSignature.saveName(file.name, chunk.bytes)
+                } else file.name
+                // Renaming the extension does not change the image data.
+                destination = store.create(actualName)
                 val target = destination
-                var total = -1L
-                contentResolver.openOutputStream(target.uri, "w").use { output ->
-                    if (output == null) throw IOException("Impossibile aprire il file di destinazione")
-                    val api = RxApi(credentials)
-                    var offset = 0L
-                    var lastProgress = 0L
+                val writtenHash = java.security.MessageDigest.getInstance("SHA-256")
+                var received = 0L
+                var lastProgress = 0L
+                contentResolver.openOutputStream(target.uri, "wt").use { output ->
+                    if (output == null) throw IOException("Destinazione non scrivibile")
                     while (true) {
                         if (cancelled || Thread.currentThread().isInterrupted)
                             throw IOException("Download annullato")
-                        val chunk = api.read(file.path, offset)
-                        // MediaStore gallery metadata can be stale; TX's read size is authoritative.
-                        if (total < 0) total = chunk.total
-                        if (total != chunk.total)
+                        if (chunk.total != sourceBytes)
                             throw IOException("Il file originale è cambiato durante il download")
+                        if (chunk.nextOffset != received + chunk.bytes.size)
+                            throw IOException("Sequenza blocchi non valida")
                         output.write(chunk.bytes)
-                        outputDigest.update(chunk.bytes)
-                        offset = chunk.nextOffset
+                        writtenHash.update(chunk.bytes)
+                        received = chunk.nextOffset
                         val now = System.currentTimeMillis()
                         if (now - lastProgress > 400 || chunk.complete) {
                             lastProgress = now
-                            val percent = if (total == 0L) 100L else offset * 100L / total
+                            val pct = if (sourceBytes == 0L) 100L else received * 100L / sourceBytes
                             ui {
-                                status.text = "Download · " + percent + "%"
-                                previewMessage?.text = "Salvataggio · " + percent + "%"
+                                status.text = "Download originale · " + pct + "%"
+                                previewMessage?.text = "Download originale · " + pct + "%"
                             }
                         }
                         if (chunk.complete) {
-                            if (offset != total) throw IOException("Download incompleto")
+                            if (received != sourceBytes) throw IOException("File incompleto")
                             break
                         }
+                        // The next block is requested only after the previous one
+                        // has been written; retries never append duplicate bytes.
+                        chunk = api.read(file.path, received)
                     }
                     output.flush()
                 }
                 if (cancelled || Thread.currentThread().isInterrupted)
                     throw IOException("Download annullato")
                 ui {
-                    status.text = "Verifica file…"
-                    previewMessage?.text = "Verifica file salvato…"
+                    status.text = "Verifica integrità…"
+                    previewMessage?.text = "Verifica integrità…"
                 }
-                val stream = contentResolver.openInputStream(target.uri)
-                    ?: throw IOException("Android non permette di verificare il file salvato")
-                TransferIntegrity.verifySaved(stream, total, outputDigest.digest())
+                val saved = contentResolver.openInputStream(target.uri)
+                    ?: throw IOException("File salvato non leggibile")
+                TransferIntegrity.verifySaved(saved, sourceBytes, writtenHash.digest())
+                if (RemoteNames.mimeType(actualName).startsWith("image/")) {
+                    // Do not publish an image just because its byte count matched.
+                    PhotoVerifier.verifySavedImage(contentResolver, target.uri)
+                }
                 store.publish(target)
                 published = true
                 ui {
-                    status.text = "Salvato e verificato: " + file.name
-                    previewMessage?.text = "Salvato in " + target.relativePath
+                    status.text = "Salvato e verificato: " + actualName
+                    previewMessage?.text = "Salvato: " + target.relativePath + actualName
                     AlertDialog.Builder(this)
-                        .setTitle("File salvato")
-                        .setMessage(file.name + "\n\nCartella: " + target.relativePath)
+                        .setTitle("File originale salvato")
+                        .setMessage(actualName + "\n" + prettySize(sourceBytes) +
+                            "\n\nCartella: " + target.relativePath)
                         .setNegativeButton("CHIUDI", null)
                         .setPositiveButton("APRI") { _, _ ->
                             runCatching {
                                 startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(target.uri, RemoteNames.mimeType(file.name))
+                                    setDataAndType(target.uri, RemoteNames.mimeType(actualName))
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 })
                             }.onFailure {
-                                status.text = "File salvato, ma nessuna app può aprirlo"
+                                status.text = "File salvato, ma nessuna app lo può aprire"
                             }
                         }.show()
                 }
             } catch (error: Exception) {
+                // Avoid leaving a broken/empty photo visible in the gallery.
                 if (!published) destination?.let { runCatching { store.discard(it) } }
                 ui {
-                    val message = error.message ?: "errore sconosciuto"
-                    status.text = "Download fallito: " + message
-                    previewMessage?.text = "Salvataggio non riuscito: " + message
+                    val detail = error.message ?: "errore sconosciuto"
+                    status.text = "Download non riuscito: " + detail
+                    previewMessage?.text = "Non salvato: " + detail
                     AlertDialog.Builder(this)
-                        .setTitle("Download non riuscito")
-                        .setMessage(message)
+                        .setTitle("File non salvato")
+                        .setMessage(detail + "\n\nNon è stato pubblicato un file incompleto.")
                         .setPositiveButton("OK", null)
                         .show()
                 }
