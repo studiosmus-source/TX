@@ -568,9 +568,14 @@ class MainActivity : Activity() {
                         if (now - lastProgress > 400 || chunk.complete) {
                             lastProgress = now
                             val pct = if (sourceBytes == 0L) 100L else received * 100L / sourceBytes
+                            val elapsedMs = (android.os.SystemClock.elapsedRealtime() -
+                                downloadStartedMs).coerceAtLeast(1L)
+                            val transferSpeed = received * 1000L / elapsedMs
+                            val progress = "Download · " + pct + "% · " +
+                                prettySize(transferSpeed) + "/s"
                             ui {
-                                status.text = "Download originale · " + pct + "%"
-                                previewMessage?.text = "Download originale · " + pct + "%"
+                                status.text = progress
+                                previewMessage?.text = progress
                             }
                         }
                         if (chunk.complete) {
