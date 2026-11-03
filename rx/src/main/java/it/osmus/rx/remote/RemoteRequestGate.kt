@@ -9,12 +9,21 @@ internal object RemoteRequestGate {
     private val monitor = Object()
     private var active = false
     private var priorityWaiting = 0
+    private var transferActive = false
+
+    /** Pause low-priority thumbnails for the whole file transfer. */
+    fun setTransferActive(value: Boolean) {
+        synchronized(monitor) {
+            transferActive = value
+            monitor.notifyAll()
+        }
+    }
 
     fun <T> run(priority: Boolean, work: () -> T): T {
         synchronized(monitor) {
             if (priority) priorityWaiting++
             try {
-                while (active || (!priority && priorityWaiting > 0)) {
+                while (active || (!priority && (priorityWaiting > 0 || transferActive))) {
                     monitor.wait()
                 }
                 active = true
