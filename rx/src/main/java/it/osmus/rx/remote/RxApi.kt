@@ -45,8 +45,11 @@ class RxApi(private val credentials: Credentials) {
     )
     data class GalleryPage(val entries: List<GalleryItem>, val hasMore: Boolean, val nextOffset: Int)
 
-    fun gallery(offset: Int, limit: Int = 36): GalleryPage {
-        val result = call(JSONObject().put("op", "gallery").put("path", "")
+    fun gallery(offset: Int, limit: Int = 36, hiddenByNomedia: Boolean = false): GalleryPage {
+        // Existing relay accepts a relative path for gallery operations.
+        // A reserved marker selects the TX filesystem-based .nomedia index.
+        val marker = if (hiddenByNomedia) ".nomedia" else ""
+        val result = call(JSONObject().put("op", "gallery").put("path", marker)
             .put("offset", offset).put("limit", limit))
         val entries = result.getJSONArray("entries")
         return GalleryPage((0 until entries.length()).map { index ->
