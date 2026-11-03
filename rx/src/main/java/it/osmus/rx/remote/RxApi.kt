@@ -1,6 +1,7 @@
 package it.osmus.rx.remote
 
 import android.util.Base64
+import it.osmus.rx.TransferIntegrity
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -97,6 +98,14 @@ class RxApi(private val credentials: Credentials) {
         if (bytes.size > 65_536 || next != offset + bytes.size || total < next ||
             (!complete && bytes.isEmpty()) || (complete && next != total)) {
             throw IOException("Blocco file non valido")
+        }
+        // Supports previously installed TX versions; new TX always supplies the hash.
+        if (result.has("sha256")) {
+            val expected = result.getString("sha256")
+            if (!expected.matches(Regex("[0-9a-f]{64}")) ||
+                expected != TransferIntegrity.sha256(bytes)) {
+                throw IOException("Dati ricevuti danneggiati: controllo integrità fallito")
+            }
         }
         return RemoteChunk(bytes, next, total, complete)
     }
