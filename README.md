@@ -1,36 +1,29 @@
-# TX – Trasmittente Android
+# GALLERY — TX + RX Android
 
-**0.3.0 – Attivazione da remoto, senza campi di configurazione sul trasmittente.**
+Versioni candidate: **TX 0.4.8** e **RX 0.2.8** (accoppiamento con un solo avvio).
 
-## Esperienza TX
+## Flusso di autorizzazione
 
-1. Si apre l'APK e si concede **Accesso a tutti i file** attraverso le impostazioni Android.
-2. TX inoltra automaticamente una richiesta di attivazione al relay preconfigurato `https://tx-3dhs.onrender.com`.
-3. Dal dispositivo RX si approva la richiesta (tramite la pagina di attivazione web in questa versione), inserendo **RX_TOKEN** per autenticarsi e **TX_TOKEN** per attivare il trasmittente. Selezionare soltanto la richiesta identificata dal codice mostrato da TX.
-4. La chiave TX viene consegnata attraverso HTTPS, memorizzata cifrata con **Android Keystore** sul trasmittente e il pulsante **SALVA E AVVIA** diventa disponibile.
-5. Quando si preme il pulsante, il servizio Android avvia la connessione HTTPS e risponde alle richieste del ricevente. Premendo nuovamente lo stesso pulsante si interrompe la sessione.
+1. Sul trasmittente TX, concedi una sola volta l'accesso ai file richiesto da Android e premi **INVIA RICHIESTA A RX**. Alla prima installazione può comparire anche il permesso per le notifiche.
+2. TX avvia un servizio in primo piano, invia **una richiesta** e chiude la propria schermata. Continua ad attendere l'approvazione anche con la schermata chiusa. Il codice di verifica compare nella notifica discreta GALLERY (se le notifiche sono abilitate), oppure riaprendo TX.
+3. Su RX, nella sezione Attivazioni, confronta il codice e scegli **APPROVA**. TX riceve la chiave su HTTPS, la salva cifrata tramite Android Keystore e avvia automaticamente la connessione al relay. Non occorre riaprire TX per premere AVVIA.
+4. RX passa automaticamente alla galleria. Da lì è possibile consultare foto, video, cartelle e altri file condivisi.
+5. Nei successivi avvii, se la credenziale TX è ancora salvata, **AVVIA COLLEGAMENTO** riparte senza nuovo pairing. Riaprendo TX puoi usare **INTERROMPI COLLEGAMENTO**.
 
-Il trasmittente **non chiede URL né chiavi**. Il relay non archivia i file del telefono, ma inoltra le risposte in RAM. L'accesso da remoto funziona soltanto per le aree consentite da Android: non sono accessibili i dati privati protetti delle altre app. Il server può vedere i dati inoltrati (TLS, non cifratura end-to-end).
+Il polling dell'attivazione è gestito dal servizio TX, non dalla Activity. Errori di rete temporanei durante il polling conservano la stessa richiesta. Una nuova richiesta si crea soltanto dopo scadenza o invalidazione della precedente. Nessun accesso remoto è consentito prima dell'approvazione su RX.
 
-## Approva dal browser RX, per ora
+## Architettura e sicurezza
 
-Aprire `https://tx-3dhs.onrender.com/pair` sul telefono ricevente.
+- `app/`: trasmittente Android. Accesso in sola lettura alle aree della memoria condivisa consentite da Android. Connessione HTTPS in uscita; nessuna porta aperta sul dispositivo.
+- `rx/`: ricevitore Android. Autorizzazione, galleria e file. Salvataggio via MediaStore con verifica dei byte e della decodificabilità delle foto.
+- `relay/`: backend Node.js su Render. Autorizza separatamente TX e RX, inoltra i dati tramite HTTPS e RAM, senza archiviarne i file su disco. Non è cifratura end-to-end rispetto al server.
+- I segreti `TX_TOKEN` e `RX_TOKEN` non sono inclusi negli APK o nei sorgenti. RX li richiede solo alla prima configurazione; TX riceve la propria chiave dopo approvazione.
+- TX/RX 0.4.7+/0.2.7+ possono trasferire blocchi fino a 512 KiB, riducendo le richieste rispetto ai vecchi blocchi da 64 KiB.
 
-- Inserire la chiave **RX_TOKEN** (autenticazione della pagina) e la chiave **TX_TOKEN** per autorizzare il TX.
-- Premere **Cerca richieste**, confrontare il codice mostrato sul trasmittente, e premere **Approva questa richiesta**.
-- Non condividere nessuna chiave con altre persone. Non sono presenti segreti nei sorgenti GitHub o nell'APK.
+## Limiti Android
 
-**Limite attuale:** la pagina web non invia notifiche push; va aperta manualmente. Una vera notifica sul telefono ricevente richiede ancora l'app RX e il suo canale push. Le richieste di attivazione scadono dopo 10 minuti; TX ne invia un'altra se è ancora aperta. Su Render Free lo spin-down può interrompere sessioni non ancora completate.
+Il servizio mantiene una notifica foreground (piccola e silenziosa) e rimane controllabile e interrompibile dall'utente. Android 15+ limita i servizi `dataSync` a 6 ore cumulative per 24 ore mentre l'app è in background, e ne limita il riavvio automatico dopo un reboot. Su Android 15+ il riavvio dal boot richiede un'azione sulla notifica di promemoria quando consentita. Le app private e i file eliminati definitivamente non sono accessibili con i normali permessi.
 
-## Struttura
+## Verifica
 
-- `app/`: Android Kotlin, richiesta automatica, Keystore AES-GCM, avvio/interruzione del servizio solo dopo l'approvazione.
-- `relay/server.mjs`: HTTPS dietro proxy Render, autenticazione RX e TX, richieste di pairing temporanee, lettura file a blocchi.
-- `relay/pair.html` e `relay/pair.js`: pagina amministrativa senza script di terze parti e senza salvataggio delle chiavi nel browser.
-- `relay/rx-cli.mjs`: client di collaudo, non APK ricevente.
-
-## Build e test
-
-L'APK non contiene chiavi. `cd relay && node --test test/*.test.mjs` verifica autenticazione e pairing; la pipeline GitHub esegue anche `gradle testDebugUnitTest assembleDebug`. Il relay deve essere pubblicato su Render aggiornando il branch `main`. Le richieste automatiche RX e TX sono **da collaudare su dispositivi reali**.
-
-Il servizio Android può essere sospeso dal sistema dopo i limiti dei foreground service `dataSync` (Android 15+). Non è garantito il funzionamento permanente. L'app TX mostra lo stato e la notifica Android durante la trasmissione.
+Test automatici: `cd relay && node --test test/*.test.mjs`, `gradle :app:testDebugUnitTest :rx:testDebugUnitTest :app:assembleDebug :rx:assembleDebug`. L'esecuzione CI e la compilazione non dimostrano il comportamento su due dispositivi reali. Le build debug GitHub Actions non dispongono di una chiave di firma persistente; non disinstallare una versione configurata senza prima considerare la perdita delle credenziali.

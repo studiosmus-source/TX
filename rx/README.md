@@ -1,27 +1,19 @@
-# RX Android 0.2.0
+# GALLERY RX 0.2.8
 
-L'app RX è un modulo separato (:rx) nel repository TX; non richiede modifiche al relay Render.
+RX riceve l'autorizzazione e visualizza i file del trasmittente TX.
 
-Funzioni:
-- Inserisci RX_TOKEN e TX_TOKEN **solo in RX** al primo avvio; le chiavi sono cifrate tramite Android Keystore.
-- Consulta le richieste di attivazione TX e approva quella con il codice visualizzato sul dispositivo trasmittente.
-- Galleria principale con foto e video indicizzati, anteprime e visualizzazione grande; scheda File remoti per navigare tra le cartelle (anche nascoste) e carica altri risultati scorrendo.
-- Tocca un file, scegli "Scarica" e seleziona dove salvarlo tramite il selettore documenti Android. Il contenuto viene letto in blocchi e scritto direttamente nel documento, senza accumularlo in RAM.
-- Dopo il download, scegli "Apri". È disponibile l'annullamento.
+## Uso
 
-Sicurezza:
-- Nessun token nel repository o APK.
-- Solo autorizzazione INTERNET: RX non richiede accesso a tutti i file e non esplora la memoria locale.
-- Tutto il traffico è HTTPS. I contenuti attraversano il relay in memoria, senza crittografia end-to-end.
+- Una sola configurazione iniziale delle chiavi `RX_TOKEN` e `TX_TOKEN` in RX; le credenziali vengono cifrate tramite Android Keystore.
+- In **ATTIVAZIONI** appare la richiesta generata dal servizio TX. Confronta il codice con la notifica GALLERY di TX e premi **APPROVA**.
+- Dopo la conferma, RX apre automaticamente **GALLERIA**. Se TX non ha ancora concluso il polling, attende il collegamento iniziale e ritenta senza chiedere un nuovo pairing.
+- Tocca una foto o un video per un'anteprima grande, con X per tornare all'elenco e SALVA per il file originale. I file vengono salvati nelle raccolte Android (Pictures/GALLERY, Movies/GALLERY, Music/GALLERY o Download/GALLERY) e verificati prima della pubblicazione.
+- L'esplorazione **FILE** mostra le aree accessibili della memoria condivisa di TX, ma non i dati riservati ad altre app o file definitivamente eliminati.
 
-Limitazioni:
-- Le richieste TX vengono aggiornate ogni 10 secondi soltanto quando RX è aperto; non esistono notifiche push di sistema.
-- L'ordine dell'elenco è deciso dal TX (prima cartelle, poi nomi).
-- Download senza ripresa dopo chiusura; mantenere RX aperta durante i trasferimenti.
-- Render Free può sospendersi per inattività. Il servizio TX può essere sospeso dal sistema Android.
-- Dopo l'approvazione TX avvia il servizio, torna alla home e mantiene la notifica Android visibile. Android 15+ può sospenderlo dopo 6 ore di dataSync in 24 ore.
+RX 0.2.8 usa blocchi fino a 512 KiB con ritorno ai blocchi da 64 KiB quando necessario; sospende le miniature durante un download. Il server Render continua a usare HTTPS e credenziali distinte, senza modifiche al pairing.
 
-Build:
-gradle :rx:testDebugUnitTest :rx:assembleDebug
+## Limiti e test
 
-L'APK di debug è generato in rx/build/outputs/apk/debug. I test funzionali tra due telefoni reali richiedono un collaudo a parte.
+La richiesta RX viene aggiornata automaticamente quando la schermata Attivazioni è aperta, senza notifiche push di sistema. Il download non riprende dopo la chiusura forzata di RX. La connessione TX è soggetta ai limiti di Android sui servizi `dataSync`.
+
+Verifiche locali/CI: `gradle :rx:testDebugUnitTest :rx:assembleDebug`. Il pairing, la chiusura della schermata TX e il funzionamento reale su due telefoni devono essere collaudati sul dispositivo. Le APK debug generate da runner diversi possono avere firme incompatibili per gli aggiornamenti.

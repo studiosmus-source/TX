@@ -7,7 +7,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Outbound HTTPS enrollment. No remote file access until user taps Save and Start. */
+/** User-initiated HTTPS enrollment; file access starts only after explicit RX approval. */
 class EnrollmentClient(private val deviceName: String) {
     private val running = AtomicBoolean(true)
     @Volatile private var current: HttpURLConnection? = null
@@ -17,36 +17,59 @@ class EnrollmentClient(private val deviceName: String) {
         current?.disconnect()
     }
 
+    /**
+     * Keep ONE enrollment request alive through transient network errors.
+     * Only create a new request when the old one has expired or is gone.
+     */
     fun run(onCode: (String) -> Unit, onReady: (String) -> Unit, onError: (String) -> Unit) {
+        var current: EnrollmentAttempt? = null
         while (running.get() && !Thread.currentThread().isInterrupted) {
             try {
-                val created = post("/v1/pair/request", JSONObject().put("name", deviceName))
-                val id = created.getString("id")
-                val claim = created.getString("claim")
-                val code = created.getString("code")
-                onCode(code)
-                val expiry = System.currentTimeMillis() + 600_000L
-                while (running.get() && System.currentTimeMillis() < expiry) {
-                    Thread.sleep(3500)
+                if (current == null) {
+                    val created = post("/v1/pair/request", JSONObject().put("name", deviceName))
+                    current = EnrollmentAttempt(
+                        id = created.getString("id"),
+                        claim = created.getString("claim"),
+                        code = created.getString("code"),
+                        expiresAtMillis = System.currentTimeMillis() + 600_000L
+                    )
+                    onCode(current.code)
+                }
+
+                val attempt = current
+                if (System.currentTimeMillis() >= attempt.expiresAtMillis) {
+                    current = null
+                    continue
+                }
+                Thread.sleep(3_500)
+                if (!running.get()) break
+                val response = post("/v1/pair/poll", JSONObject()
+                    .put("id", attempt.id).put("claim", attempt.claim))
+                if (response.optBoolean("approved", false)) {
                     if (!running.get()) break
-                    val response = post("/v1/pair/poll", JSONObject().put("id", id).put("claim", claim))
-                    if (response.optBoolean("approved", false)) {
-                        if (!running.get()) break
-                        val token = response.getString("txToken")
-                        RelayConfig(SecureRelaySettings.RELAY_URL, token)
-                        onReady(token)
-                        return
-                    }
+                    val token = response.getString("txToken")
+                    RelayConfig(SecureRelaySettings.RELAY_URL, token)
+                    onReady(token)
+                    return
                 }
             } catch (interrupted: InterruptedException) {
                 Thread.currentThread().interrupt()
                 break
-            } catch (e: Exception) {
+            } catch (error: Exception) {
                 if (!running.get()) break
-                // Do not expose network headers or any sensitive response body to the UI.
-                onError(if (e.message?.contains("HTTP 429") == true) "Troppe richieste: nuovo tentativo automatico"
-                    else "Collegamento non disponibile: nuovo tentativo automatico")
-                try { Thread.sleep(12_000) } catch (_: InterruptedException) { break }
+                if (EnrollmentRetryPolicy.mustRestartRequest(error.message)) {
+                    current = null
+                    onError("Richiesta scaduta: ne invio una nuova")
+                } else {
+                    // An intermittent network failure is not a reason to ask RX to pair again.
+                    onError(if (current == null) "Invio richiesta in corso"
+                        else "Richiesta attiva: riconnessione in corso")
+                }
+                try { Thread.sleep(6_000) }
+                catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
             }
         }
     }
