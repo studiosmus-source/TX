@@ -479,20 +479,27 @@ class MainActivity : Activity() {
         val cancel = button("ANNULLA DOWNLOAD", true) { cancelled = true }
         content.addView(cancel)
         ioWorker.execute {
-            var finished = false
+            var verified = false
             try {
-                contentResolver.openOutputStream(destination, "w").use { output ->
+                val sourceDigest = java.security.MessageDigest.getInstance("SHA-256")
+                var total = -1L
+                contentResolver.openOutputStream(destination, "wt").use { output ->
                     if (output == null) throw IOException("Destinazione non disponibile")
                     val api = RxApi(c)
                     var offset = 0L
-                    var total = -1L
                     var lastProgress = 0L
                     while (true) {
                         if (cancelled || Thread.currentThread().isInterrupted)
                             throw IOException("Download annullato")
                         val chunk = api.read(file.path, offset)
-                        if (total < 0) total = chunk.total
-                        if (total != chunk.total) throw IOException("Il file è cambiato")
+                        if (total < 0) {
+                            total = chunk.total
+                            if (total != file.size)
+                                throw IOException("Dimensione del file TX cambiata: aggiorna l'elenco")
+                        }
+                        if (total != chunk.total)
+                            throw IOException("Il file TX è cambiato durante il download")
+                        sourceDigest.update(chunk.bytes)
                         output.write(chunk.bytes)
                         offset = chunk.nextOffset
                         val now = System.currentTimeMillis()
@@ -501,14 +508,23 @@ class MainActivity : Activity() {
                             val percent = if (total == 0L) 100L else offset * 100L / total
                             ui { status.text = "Download · " + percent + "%" }
                         }
-                        if (chunk.complete) break
+                        if (chunk.complete) {
+                            if (offset != total) throw IOException("Download incompleto")
+                            break
+                        }
                     }
                     output.flush()
                 }
-                finished = true
+                if (cancelled || Thread.currentThread().isInterrupted)
+                    throw IOException("Download annullato")
+                ui { status.text = "Verifica del file salvato…" }
+                val saved = contentResolver.openInputStream(destination)
+                    ?: throw IOException("Impossibile verificare il file salvato")
+                TransferIntegrity.verifySaved(saved, total, sourceDigest.digest())
+                verified = true
                 ui {
-                    status.text = "Salvato: " + file.name
-                    AlertDialog.Builder(this).setMessage("Download completato")
+                    status.text = "Salvato e verificato: " + file.name
+                    AlertDialog.Builder(this).setMessage("Download completato e verificato")
                         .setNegativeButton("Chiudi", null)
                         .setPositiveButton("APRI") { _, _ ->
                             runCatching {
@@ -520,8 +536,9 @@ class MainActivity : Activity() {
                         }.show()
                 }
             } catch (e: Exception) {
-                if (!finished) runCatching { contentResolver.delete(destination, null, null) }
-                ui { status.text = safeError(e) }
+                // ACTION_CREATE_DOCUMENT created a new destination: discard incomplete files.
+                if (!verified) runCatching { contentResolver.delete(destination, null, null) }
+                ui { status.text = "Download non completato: " + safeError(e) }
             } finally {
                 ui {
                     downloading = false
