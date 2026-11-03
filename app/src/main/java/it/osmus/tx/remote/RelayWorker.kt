@@ -106,7 +106,7 @@ class RelayWorker(
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12_000
-            readTimeout = 32_000
+            readTimeout = 75_000
             setRequestProperty("Authorization", "Bearer ${config.txToken}")
             setRequestProperty("Accept", "application/json")
             instanceFollowRedirects = false
