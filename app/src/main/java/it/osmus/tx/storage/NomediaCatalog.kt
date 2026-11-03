@@ -42,6 +42,7 @@ class NomediaCatalog(root: File) {
         var examined = 0
         var folders = 0
         var truncated = false
+        val startNanos = System.nanoTime()
         while (queue.isNotEmpty()) {
             if (Thread.currentThread().isInterrupted) {
                 truncated = true
