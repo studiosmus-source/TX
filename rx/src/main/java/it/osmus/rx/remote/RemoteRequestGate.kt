@@ -1,7 +1,5 @@
 package it.osmus.rx.remote
 
-import java.util.concurrent.locks.ReentrantLock
-
 /**
  * The mono-TX relay processes one command at a time.
  * Prevent gallery thumbnails from saturating its finite pending-job queue.
@@ -21,7 +19,10 @@ internal object RemoteRequestGate {
                 }
                 active = true
             } finally {
-                if (priority) priorityWaiting--
+                if (priority) {
+                    priorityWaiting--
+                    monitor.notifyAll()
+                }
             }
         }
         try {
