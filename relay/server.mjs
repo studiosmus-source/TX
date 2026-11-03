@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const MAX_REQUEST_BYTES = 4096;
-const MAX_RESULT_BYTES = 160_000;
+// Up to 512 KiB of raw file data becomes ~699 KiB in base64 JSON.
+const MAX_RESULT_BYTES = 800_000;
+const MAX_READ_BYTES = 512 * 1024;
 const MAX_PENDING = 16;
 const TTL_MS = 120_000;
 const PAIR_TTL_MS = 600_000;
@@ -167,7 +169,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         if (!obj || !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
             !Number.isSafeInteger(obj.offset) || obj.offset < 0 ||
             ((obj.op === 'list' || obj.op === 'gallery') && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > (obj.op === 'gallery' ? 80 : 200))) ||
-            (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > 65_536))) {
+            (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > MAX_READ_BYTES))) {
           return send(res, 400, { error: 'invalid_request' });
         }
         const id = randomUUID();
