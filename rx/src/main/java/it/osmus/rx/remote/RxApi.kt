@@ -19,6 +19,10 @@ data class RemoteFile(
 data class DirectoryPage(val entries: List<RemoteFile>, val hasMore: Boolean)
 
 class RxApi(private val credentials: Credentials) {
+    // One 512 KiB request replaces eight 64 KiB HTTP round trips.
+    // Automatically fall back when an older TX/relay supports only 64 KiB.
+    private var maxReadBytes = FAST_READ_BYTES
+
     fun pending(): List<PendingPair> {
         val response = request("GET", "/v1/pair/pending")
         val items = response.getJSONArray("requests")
@@ -89,13 +93,27 @@ class RxApi(private val credentials: Credentials) {
                            val total: Long, val complete: Boolean)
 
     fun read(path: String, offset: Long): RemoteChunk {
-        val result = call(JSONObject().put("op", "read").put("path", path)
-            .put("offset", offset).put("length", 65_536))
+        fun request(length: Int): JSONObject =
+            call(JSONObject().put("op", "read").put("path", path)
+                .put("offset", offset).put("length", length))
+        val result = try {
+            request(maxReadBytes)
+        } catch (error: IOException) {
+            val detail = error.message.orEmpty()
+            // Either the relay rejected the new limit (400), or an older TX
+            // FileCatalog rejected a larger block. Never retry a different file.
+            val legacyLimit = detail.contains("HTTP 400") ||
+                detail.contains("Dimensione blocco non valida")
+            if (maxReadBytes == FAST_READ_BYTES && legacyLimit) {
+                maxReadBytes = LEGACY_READ_BYTES
+                request(maxReadBytes)
+            } else throw error
+        }
         val bytes = Base64.decode(result.getString("base64"), Base64.DEFAULT)
         val next = result.getLong("nextOffset")
         val total = result.getLong("totalBytes")
         val complete = result.getBoolean("complete")
-        if (bytes.size > 65_536 || next != offset + bytes.size || total < next ||
+        if (bytes.size > maxReadBytes || next != offset + bytes.size || total < next ||
             (!complete && bytes.isEmpty()) || (complete && next != total)) {
             throw IOException("Blocco file non valido")
         }
@@ -150,7 +168,8 @@ class RxApi(private val credentials: Credentials) {
         val conn = (URL(RxSecrets.URL + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12_000
-            readTimeout = 32_000
+            // 512 KiB binary result may need longer over mobile data.
+            readTimeout = 75_000
             instanceFollowRedirects = false
             setRequestProperty("Authorization", "Bearer " + credentials.rxToken)
             setRequestProperty("Accept", "application/json")
@@ -195,6 +214,8 @@ class RxApi(private val credentials: Credentials) {
     private class ServerBusyException : IOException("Server occupato")
 
     companion object {
+        private const val LEGACY_READ_BYTES = 64 * 1024
+        private const val FAST_READ_BYTES = 512 * 1024
         private val ID = Regex("[0-9a-f-]{36}")
     }
 }
