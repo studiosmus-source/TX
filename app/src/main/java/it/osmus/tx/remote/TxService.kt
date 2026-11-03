@@ -174,6 +174,11 @@ class TxService : Service() {
         val openApp = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        // Keep a real, discoverable stop control for this remote-file service,
+        // while the only button inside TX is the requested TEST action.
+        val stopSession = PendingIntent.getService(this, 1,
+            Intent(this, TxService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setContentTitle("GALLERY")
             .setContentText(message)
@@ -183,6 +188,9 @@ class TxService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setContentIntent(openApp)
+            .addAction(Notification.Action.Builder(
+                android.R.drawable.ic_menu_close_clear_cancel, "DISATTIVA", stopSession
+            ).build())
             .build()
     }
 
