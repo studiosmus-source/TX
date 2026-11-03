@@ -8,7 +8,7 @@ const rxToken = 'RX-token-for-tests-12345678901234567890123';
 async function withRelay(fn) {
   const relay = createRelay({ txToken, rxToken, requireTls: false });
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
-  try { await fn(`http://127.0.0.1:${relay.address().port}`); }
+  try { await fn(`http://127.0.0.1:${relay.address().port}`, relay); }
   finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
 }
 
@@ -23,7 +23,7 @@ test('only correct role/token may submit or retrieve requests', async () => with
   assert.equal(res.status, 401);
   res = await access(base + '/v1/rx/request', txToken, 'POST', { op: 'list', path: '', offset: 0, limit: 20 });
   assert.equal(res.status, 404);
-  res = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'photo.jpg', offset: 0, length: 70_000 });
+  res = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'photo.jpg', offset: 0, length: 524_289 });
   assert.equal(res.status, 400);
 }));
 
@@ -168,39 +168,79 @@ test('RX gallery and preview are authorized, bounded and routed to TX', async ()
 }));
 
 
-test('byte-for-byte photo, audio and video blocks survive relay with SHA-256', async () => withRelay(async base => {
-  const { randomBytes, createHash } = await import('node:crypto');
-  const expected = randomBytes(174_221);
-  for (const path of ['DCIM/photo.jpg', 'Music/voice.m4a', 'Movies/clip.mp4']) {
-    const received = [];
-    let offset = 0;
-    while (offset < expected.length) {
-      const requested = await access(base + '/v1/rx/request', rxToken, 'POST',
-        { op: 'read', path, offset, length: 65_536 });
-      assert.equal(requested.status, 202);
-      const { id } = await requested.json();
-      const txReply = await access(base + '/v1/tx/next', txToken);
-      assert.equal(txReply.status, 200);
-      const command = await txReply.json();
-      assert.equal(command.id, id);
-      assert.equal(command.offset, offset);
-      const bytes = expected.subarray(offset, offset + command.length);
-      const nextOffset = offset + bytes.length;
-      const sha256 = createHash('sha256').update(bytes).digest('hex');
-      const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', {
-        ok: true, base64: bytes.toString('base64'), sha256,
-        totalBytes: expected.length, nextOffset, complete: nextOffset === expected.length,
+test('16 completed long-poll thumbnails do not exhaust the queue before download', async () =>
+  withRelay(async (base, relay) => {
+    for (let i = 0; i < 20; i++) {
+      const txNext = access(base + '/v1/tx/next', txToken);
+      const command = i === 19
+        ? { op: 'read', path: 'DCIM/original.jpg', offset: 0, length: 5 }
+        : { op: 'thumb', path: 'DCIM/image-' + i + '.jpg', offset: 0 };
+      const created = await access(base + '/v1/rx/request', rxToken, 'POST', command);
+      assert.equal(created.status, 202, 'request ' + i + ' must not see busy');
+      const { id } = await created.json();
+      const txResult = await txNext;
+      assert.equal(txResult.status, 200);
+      assert.equal((await txResult.json()).id, id);
+
+      // Observe the incoming RX long-poll on the server, not just the client
+      // call. This forces coverage of the direct waiter delivery branch.
+      const waiterArrived = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          relay.off('request', onRequest);
+          reject(new Error('RX long-poll did not arrive'));
+        }, 3000);
+        function onRequest(req) {
+          if (req.method === 'GET' && req.url === '/v1/rx/result/' + id) {
+            clearTimeout(timer);
+            relay.off('request', onRequest);
+            resolve();
+          }
+        }
+        relay.on('request', onRequest);
       });
+      const waitingRx = access(base + '/v1/rx/result/' + id, rxToken);
+      await waiterArrived;
+
+      const data = { ok: true, base64: Buffer.from('hello').toString('base64'),
+        totalBytes: 5, nextOffset: 5, complete: true };
+      const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', data);
       assert.equal(posted.status, 200);
-      const result = await access(base + '/v1/rx/result/' + id, rxToken);
-      assert.equal(result.status, 200);
-      const data = await result.json();
-      const actual = Buffer.from(data.base64, 'base64');
-      assert.equal(createHash('sha256').update(actual).digest('hex'), data.sha256);
-      assert.equal(data.nextOffset, nextOffset);
-      received.push(actual);
-      offset = data.nextOffset;
+      const delivered = await waitingRx;
+      assert.equal(delivered.status, 200);
+      assert.deepEqual(await delivered.json(), data);
+
+      // The waiter consumed the result: it must no longer count as pending.
+      const alreadyDelivered = await access(base + '/v1/rx/result/' + id, rxToken);
+      assert.equal(alreadyDelivered.status, 404);
     }
-    assert.deepEqual(Buffer.concat(received), expected, path);
-  }
-}));
+  })
+);
+
+test('large binary 512 KiB read remains byte-exact and authenticated', async () =>
+  withRelay(async base => {
+    const original = Buffer.alloc(512 * 1024);
+    for (let i = 0; i < original.length; i++) original[i] = i % 251;
+    const next = access(base + '/v1/tx/next', txToken);
+    const requested = await access(base + '/v1/rx/request', rxToken, 'POST',
+      { op: 'read', path: 'DCIM/large.jpg', offset: 0, length: original.length });
+    assert.equal(requested.status, 202);
+    const { id } = await requested.json();
+    const incoming = await next;
+    assert.equal(incoming.status, 200);
+    const command = await incoming.json();
+    assert.equal(command.id, id);
+    assert.equal(command.length, 512 * 1024);
+    const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', {
+      ok: true,
+      base64: original.toString('base64'),
+      nextOffset: original.length,
+      totalBytes: original.length,
+      complete: true,
+    });
+    assert.equal(posted.status, 200);
+    const response = await access(base + '/v1/rx/result/' + id, rxToken);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.deepEqual(Buffer.from(data.base64, 'base64'), original);
+  })
+);
