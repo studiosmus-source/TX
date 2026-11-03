@@ -1,11 +1,12 @@
-# GALLERY 0.6.0 — ripristino servizio multi-TX
+# GALLERY — ripresa del servizio dopo il riavvio
 
-La versione 0.6.0 recupera il canale HTTPS continuo di GALLERY 0.4.2, adattato alle credenziali per dispositivo introdotte in 0.5. RX 0.3.1 e il server multi-TX rimangono invariati. Nessuna modifica a token, dati personali o autorizzazioni precedentemente salvate.
+Comportamento previsto solo dopo che l'utente ha concesso l'accesso ai file, ha completato l'autorizzazione RX e ha avviato volontariamente il collegamento almeno una volta:
 
-- Configurazione iniziale su TX: concedere una volta accesso memoria e notifiche. Verificare il codice di attivazione contro quello visualizzato su RX. Dopo approvazione di RX, GALLERY avvia automaticamente il servizio senza premere altri tasti. La schermata termina e viene tolta dalle applicazioni recenti.
-- Mentre il servizio foreground è attivo, TX riceve e risponde alle richieste RX tramite HTTPS e mostra la notifica Android di accesso remoto. La notifica non richiede tocchi. È sempre possibile aprire GALLERY e selezionare «DISATTIVA COLLEGAMENTO» o revocare i permessi nelle impostazioni Android.
-- Android 15/16 limita il servizio `dataSync` a **6 ore complessive in 24 ore**. Al timeout il servizio termina. Riavviarlo dopo l'esaurimento della quota richiede che l'utente riporti l'app in primo piano; non è garantita disponibilità 24/7.
-- Al riavvio, Android 14 e precedenti possono riattivare il servizio dopo avvio se il consenso è ancora presente. Android 15/16 vieta al ricevitore BOOT_COMPLETED di riavviare un servizio dataSync. Restano programmati un controllo silenzioso ogni 24 ore e una finestra di accesso di circa 4 minuti ogni 24 ore solo se le notifiche sono autorizzate, con esecuzione soggetta a Doze e risparmio energetico.
-- Se l'autorizzazione alle notifiche è negata, il solo heartbeat non consente accesso ai file. Non è previsto accesso nascosto.
+- Android 11–14: al broadcast BOOT_COMPLETED GALLERY tenta l'avvio del proprio foreground service dataSync, con notifica visibile.
+- Android 15–16: Android vieta avviare un foreground service dataSync da BOOT_COMPLETED. GALLERY pubblica, **se l'utente ha concesso il permesso notifiche**, il promemoria **«Tocca per riprendere il collegamento»**. Un tocco apre l'app, che ripristina la connessione e ritorna alla home. Il collegamento continuo senza alcun intervento non è supportato su queste versioni.
+- Riavvio del processo quando il sistema lo consente: il servizio usa START_STICKY, ma questa non è una garanzia di persistenza; restano i limiti del sistema e il limite dataSync di 6 ore cumulative ogni 24 ore su Android 15+.
+- **INTERROMPI CONNESSIONE** elimina l'intenzione di ripartire e cancella il promemoria. L'avvio involontario non è consentito.
+- Se l'app è stata arrestata forzatamente dall'utente, le trasmissioni di boot possono essere sospese fino a un nuovo avvio manuale.
+- Al primo avvio viene richiesto l'accesso alle notifiche. Se negato, GALLERY resta avviabile manualmente, ma Android 15+ non può mostrare il promemoria.
 
-Test di accettazione sul dispositivo: installazione aggiornamento senza perdita delle chiavi, nuova approvazione solo se necessaria, RX riceve galleria e file dal giusto TX, app GALLERY si chiude dopo approvazione, permesso negato blocca trasferimenti, durata servizio / timeout, ripristino da riavvio, revoca, due TX simultanei, duplicati storici RX. Build e test automatici non sostituiscono queste prove.
+Verifica consigliata su dispositivi reali: autorizzazione iniziale, avvio, riavvio Android 14 e Android 16, notifica e tap, comando Interrompi, assenza di riavvio dopo Interrompi, perdita e ritorno della rete, permessi negati, eventuale riavvio dopo installazione update e timer Android dataSync. Compilazione in CI non equivale a test funzionale di riavvio.

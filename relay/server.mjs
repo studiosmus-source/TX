@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { createHash, createHmac, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -40,21 +40,13 @@ function receive(req, max) {
   });
 }
 
-/** Multi-device relay. TX credentials are derived from a server secret and a unique device ID.
- * Device identity survives a relay restart without persisting secrets on the server.
- * Active device listing is an ephemeral presence directory refreshed by TX polling.
- */
+/** In-memory, single pair, no disk storage. Protected by distinct 32+ char tokens. */
 export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   if (typeof txToken !== 'string' || typeof rxToken !== 'string' || txToken.length < 32 || rxToken.length < 32 || equalsToken(txToken, rxToken)) {
     throw new Error('Configure two different random tokens (at least 32 chars each)');
   }
   const pending = new Map();
   const pairing = new Map();
-  const devices = new Map();
-  const validId = id => typeof id === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id);
-  const deviceSecret = id => createHmac('sha256', txToken).update('gallery-device-v1:' + id).digest('hex');
-  const ACTIVE_MS = 70_000;
   let pairWindowStart = Date.now();
   let pairRequestsInWindow = 0;
   const pairHtml = readFileSync(new URL('./pair.html', import.meta.url));
@@ -63,7 +55,6 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   const purgeTimer = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of pairing) if (now - entry.created > PAIR_TTL_MS) pairing.delete(id);
-    for (const [id, item] of devices) if (now - Math.max(item.lastSeen || 0, item.lastCheckIn || 0) > 7 * 24 * 3600_000) devices.delete(id);
     for (const [id, job] of pending) {
       if (now - job.created > TTL_MS) {
         pending.delete(id);
@@ -73,9 +64,9 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   }, 10_000);
   purgeTimer.unref();
 
-  function nextCommand(deviceId) {
+  function nextCommand() {
     for (const job of pending.values()) {
-      if (job.state === 'queued' && job.deviceId === deviceId) {
+      if (job.state === 'queued') {
         job.state = 'sent';
         return { id: job.id, ...job.command };
       }
@@ -84,9 +75,10 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
   }
 
   function dispatch() {
-    for (const waiter of [...waitingTx]) {
-      const command = nextCommand(waiter.deviceId);
-      if (!command) continue;
+    while (waitingTx.size) {
+      const command = nextCommand();
+      if (!command) return;
+      const waiter = waitingTx.values().next().value;
       waitingTx.delete(waiter);
       clearTimeout(waiter.timer);
       send(waiter.res, 200, command);
@@ -110,10 +102,9 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
     }
     const auth = req.headers.authorization || '';
     const role = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    const deviceId = req.headers['x-device-id'];
-    const isDevice = validId(deviceId) && equalsToken(role, deviceSecret(deviceId));
+    const isTx = equalsToken(role, txToken);
     const isRx = equalsToken(role, rxToken);
-    if (!isDevice && !isRx && pathname !== '/v1/pair/request' && pathname !== '/v1/pair/poll')
+    if (!isTx && !isRx && pathname !== '/v1/pair/request' && pathname !== '/v1/pair/poll')
       return send(res, 401, { error: 'unauthorized' });
 
     try {
@@ -142,9 +133,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         if (Date.now() - p.created > PAIR_TTL_MS) { pairing.delete(p.id); return send(res, 410, { error: 'expired' }); }
         if (!p.approved) return send(res, 202, { pending: true });
         pairing.delete(p.id);
-        return send(res, 200, {
-          approved: true, deviceId: p.deviceId, deviceToken: deviceSecret(p.deviceId)
-        });
+        return send(res, 200, { approved: true, txToken });
       }
       if (pathname === '/v1/pair/pending' && req.method === 'GET' && isRx) {
         return send(res, 200, { requests: [...pairing.values()].filter(p=>!p.approved)
@@ -157,31 +146,13 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         const obj = await receive(req, MAX_REQUEST_BYTES);
         if (!obj || typeof obj.txToken !== 'string' || !equalsToken(obj.txToken, txToken))
           return send(res, 403, { error: 'invalid_tx_key' });
-        p.deviceId = randomUUID();
         p.approved = true;
-        return send(res, 200, { approved: true, deviceId: p.deviceId, name: p.name });
+        return send(res, 200, { approved: true });
       }
-      // A silent check-in never accepts commands or transfers file data.
-      if (pathname === '/v1/tx/heartbeat' && req.method === 'POST' && isDevice) {
-        const previous = devices.get(deviceId);
-        const requestedName = req.headers['x-device-name'];
-        const safeName = typeof requestedName === 'string' && requestedName.length > 0 &&
-          requestedName.length <= 60 && !/[\x00-\x1f]/.test(requestedName)
-          ? requestedName : null;
-        devices.set(deviceId, {
-          id: deviceId, name: safeName || previous?.name || 'GALLERY',
-          lastSeen: previous?.lastSeen || 0, lastCheckIn: Date.now()
-        });
-        return send(res, 200, { ok: true });
-      }
-      if (pathname === '/v1/tx/next' && req.method === 'GET' && isDevice) {
-        const rawName = req.headers['x-device-name'];
-        const name = typeof rawName === 'string' && rawName.length >= 1 && rawName.length <= 60 &&
-          !/[\x00-\x1f]/.test(rawName) ? rawName : 'GALLERY';
-        devices.set(deviceId, { id: deviceId, name, lastSeen: Date.now() });
-        const available = nextCommand(deviceId);
+      if (pathname === '/v1/tx/next' && req.method === 'GET' && isTx) {
+        const available = nextCommand();
         if (available) return send(res, 200, available);
-        const waiter = { res, deviceId, timer: null };
+        const waiter = { res, timer: null };
         waiter.timer = setTimeout(() => {
           waitingTx.delete(waiter);
           send(res, 200, { pending: true });
@@ -190,40 +161,26 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         res.once('close', () => { waitingTx.delete(waiter); clearTimeout(waiter.timer); });
         return;
       }
-      if (pathname === '/v1/rx/devices' && req.method === 'GET' && isRx) {
-        return send(res, 200, { devices: [...devices.values()].map(d => ({
-          id: d.id, name: d.name, online: Date.now() - d.lastSeen < ACTIVE_MS,
-          lastCheckIn: d.lastCheckIn || 0
-        })).sort((a,b) => a.name.localeCompare(b.name)) });
-      }
       if (pathname === '/v1/rx/request' && req.method === 'POST' && isRx) {
         if (pending.size >= MAX_PENDING) return send(res, 429, { error: 'busy' });
         const obj = await receive(req, MAX_REQUEST_BYTES);
-        if (!obj || !validId(obj.deviceId) ||
-            !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
+        if (!obj || !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
             !Number.isSafeInteger(obj.offset) || obj.offset < 0 ||
             ((obj.op === 'list' || obj.op === 'gallery') && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > (obj.op === 'gallery' ? 80 : 200))) ||
             (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > 65_536))) {
           return send(res, 400, { error: 'invalid_request' });
         }
-        const known = devices.get(obj.deviceId);
-        if (!known || Date.now() - known.lastSeen > ACTIVE_MS)
-          return send(res, 409, { error: 'device_offline' });
         const id = randomUUID();
-        const job = { id, deviceId: obj.deviceId,
-          command: { op: obj.op, path: obj.path, offset: obj.offset,
-            ...(['list', 'gallery'].includes(obj.op) ? { limit: obj.limit } :
-              obj.op === 'read' ? { length: obj.length } : {}) },
-          state: 'queued', created: Date.now(), waitingRx: new Set(), result: null };
+        const job = { id, command: { op: obj.op, path: obj.path, offset: obj.offset, ...(['list', 'gallery'].includes(obj.op) ? { limit: obj.limit } : obj.op === 'read' ? { length: obj.length } : {}) }, state: 'queued', created: Date.now(), waitingRx: new Set(), result: null };
         pending.set(id, job);
         send(res, 202, { id });
         dispatch();
         return;
       }
       const txResult = /^\/v1\/tx\/result\/([0-9a-f-]{36})$/.exec(pathname);
-      if (txResult && req.method === 'POST' && isDevice) {
+      if (txResult && req.method === 'POST' && isTx) {
         const job = pending.get(txResult[1]);
-        if (!job || job.deviceId !== deviceId || job.state !== 'sent') return send(res, 404, { error: 'missing' });
+        if (!job || job.state !== 'sent') return send(res, 404, { error: 'missing' });
         const data = await receive(req, MAX_RESULT_BYTES);
         if (!data || typeof data.ok !== 'boolean') return send(res, 400, { error: 'invalid_response' });
         job.result = data;
@@ -257,7 +214,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
     clearInterval(purgeTimer);
     for (const waiter of waitingTx) { clearTimeout(waiter.timer); send(waiter.res, 503, { error: 'shutdown' }); }
     for (const job of pending.values()) for (const response of job.waitingRx) send(response, 503, { error: 'shutdown' });
-    waitingTx.clear(); pending.clear(); pairing.clear(); devices.clear();
+    waitingTx.clear(); pending.clear(); pairing.clear();
   });
   return server;
 }

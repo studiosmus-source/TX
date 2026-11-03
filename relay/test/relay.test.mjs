@@ -1,19 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import { createRelay } from '../server.mjs';
 
-const rootTxToken = 'TX-token-for-tests-12345678901234567890123';
-const deviceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const device2Id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const deviceToken = id => createHmac('sha256', rootTxToken)
-  .update('gallery-device-v1:' + id).digest('hex');
-const txToken = deviceToken(deviceId);
-const txToken2 = deviceToken(device2Id);
+const txToken = 'TX-token-for-tests-12345678901234567890123';
 const rxToken = 'RX-token-for-tests-12345678901234567890123';
 
 async function withRelay(fn) {
-  const relay = createRelay({ txToken: rootTxToken, rxToken, requireTls: false });
+  const relay = createRelay({ txToken, rxToken, requireTls: false });
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
   try { await fn(`http://127.0.0.1:${relay.address().port}`); }
   finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
@@ -21,12 +14,7 @@ async function withRelay(fn) {
 
 const access = (url, token, method = 'GET', body) => fetch(url, {
   method,
-  headers: { Authorization: `Bearer ${token}`,
-    ...(token === txToken || token === txToken2 ? {
-      'X-Device-Id': token === txToken ? deviceId : device2Id,
-      'X-Device-Name': token === txToken ? 'Gallery One' : 'Gallery Two'
-    } : {}),
-    ...(body ? { 'Content-Type': 'application/json' } : {}) },
+  headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
   body: body ? JSON.stringify(body) : undefined,
 });
 
@@ -35,13 +23,13 @@ test('only correct role/token may submit or retrieve requests', async () => with
   assert.equal(res.status, 401);
   res = await access(base + '/v1/rx/request', txToken, 'POST', { op: 'list', path: '', offset: 0, limit: 20 });
   assert.equal(res.status, 404);
-  res = await access(base + '/v1/rx/request', rxToken, 'POST', { deviceId, op: 'read', path: 'photo.jpg', offset: 0, length: 70_000 });
+  res = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'photo.jpg', offset: 0, length: 70_000 });
   assert.equal(res.status, 400);
 }));
 
 test('a single file block moves from RX request through TX to RX result', async () => withRelay(async base => {
   const next = access(base + '/v1/tx/next', txToken);
-  const request = await access(base + '/v1/rx/request', rxToken, 'POST', { deviceId, op: 'read', path: 'DCIM/photo.jpg', offset: 0, length: 12 });
+  const request = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'DCIM/photo.jpg', offset: 0, length: 12 });
   assert.equal(request.status, 202);
   const id = (await request.json()).id;
   const cmdRes = await next;
@@ -62,7 +50,7 @@ test('a single file block moves from RX request through TX to RX result', async 
 }));
 
 test('TLS can be enforced and health does not require credentials', async () => {
-  const relay = createRelay({ txToken: rootTxToken, rxToken, requireTls: true });
+  const relay = createRelay({ txToken, rxToken, requireTls: true });
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
   try {
     const base = `http://127.0.0.1:${relay.address().port}`;
@@ -74,12 +62,10 @@ test('TLS can be enforced and health does not require credentials', async () => 
 });
 
 test('TX result endpoint rejects RX credentials and malformed answers', async () => withRelay(async base => {
-  const nextPromise = access(base + '/v1/tx/next', txToken);
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const request = await access(base + '/v1/rx/request', rxToken, 'POST', { deviceId, op: 'list', path: '', offset: 0, limit: 10 });
+  const request = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'list', path: '', offset: 0, limit: 10 });
   assert.equal(request.status, 202);
   const { id } = await request.json();
-  const next = await nextPromise;
+  const next = await access(base + '/v1/tx/next', txToken);
   assert.equal((await next.json()).id, id);
   const forbidden = await access(base + '/v1/tx/result/' + id, rxToken, 'POST', { ok: true, entries: [] });
   assert.equal(forbidden.status, 404);
@@ -113,16 +99,13 @@ test('a transmitter receives its TX key only after RX approves its enrollment', 
   assert.equal((await res.json()).requests[0].code, code);
   res = await access(base + '/v1/pair/approve/' + id, rxToken, 'POST', { txToken: 'wrong-tx-token' });
   assert.equal(res.status, 403);
-  res = await access(base + '/v1/pair/approve/' + id, txToken, 'POST', { txToken: rootTxToken });
+  res = await access(base + '/v1/pair/approve/' + id, txToken, 'POST', { txToken });
   assert.equal(res.status, 404);
-  res = await access(base + '/v1/pair/approve/' + id, rxToken, 'POST', { txToken: rootTxToken });
+  res = await access(base + '/v1/pair/approve/' + id, rxToken, 'POST', { txToken });
   assert.equal(res.status, 200);
   res = await poll(claim);
   assert.equal(res.status, 200);
-  const approved = await res.json();
-  assert.equal(approved.approved, true);
-  assert.match(approved.deviceId, /^[0-9a-f-]{36}$/);
-  assert.equal(approved.deviceToken, deviceToken(approved.deviceId));
+  assert.equal((await res.json()).txToken, txToken);
   res = await poll(claim);
   assert.equal(res.status, 404);
 }));
@@ -145,7 +128,7 @@ test('pairing limits and invalid device names are enforced', async () => withRel
 }));
 
 test('HTTPS restriction also covers pairing and its browser page', async () => {
-  const relay = createRelay({ txToken: rootTxToken, rxToken, requireTls: true });
+  const relay = createRelay({ txToken, rxToken, requireTls: true });
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
   try {
     const base = `http://127.0.0.1:${relay.address().port}`;
@@ -159,7 +142,7 @@ test('HTTPS restriction also covers pairing and its browser page', async () => {
 
 test('RX gallery and preview are authorized, bounded and routed to TX', async () => withRelay(async base => {
   const invalid = await access(base + '/v1/rx/request', rxToken, 'POST',
-    {deviceId,op:'gallery',path:'',offset:0,limit:100});
+    {op:'gallery',path:'',offset:0,limit:100});
   assert.equal(invalid.status,400);
   const unauthorized = await access(base + '/v1/rx/request','wrong','POST',
     {op:'gallery',path:'',offset:0,limit:30});
@@ -169,13 +152,10 @@ test('RX gallery and preview are authorized, bounded and routed to TX', async ()
     [{op:'thumb',path:'DCIM/a.jpg',offset:0},{ok:true,base64:'ZmFrZQ=='}],
     [{op:'preview',path:'DCIM/a.jpg',offset:0},{ok:true,base64:'ZmFrZQ=='}],
   ]) {
-    const nextPromise = access(base+'/v1/tx/next',txToken);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    const request = await access(base+'/v1/rx/request',rxToken,'POST',
-      { ...command, deviceId });
+    const request = await access(base+'/v1/rx/request',rxToken,'POST',command);
     assert.equal(request.status,202);
     const {id}=await request.json();
-    const next=await nextPromise;
+    const next=await access(base+'/v1/tx/next',txToken);
     const sent=await next.json();
     assert.equal(sent.op,command.op);
     assert.equal(sent.id,id);
@@ -186,66 +166,3 @@ test('RX gallery and preview are authorized, bounded and routed to TX', async ()
     assert.deepEqual(await result.json(),answer);
   }
 }));
-
-
-test('two phones receive only their own commands; cross-device result is rejected', async () =>
-  withRelay(async base => {
-    const next1 = access(base + '/v1/tx/next', txToken);
-    const next2 = access(base + '/v1/tx/next', txToken2);
-    await new Promise(resolve => setTimeout(resolve, 30));
-    const devices = await access(base + '/v1/rx/devices', rxToken);
-    assert.equal(devices.status, 200);
-    const online = (await devices.json()).devices;
-    assert.equal(online.length, 2);
-    assert.equal(online.find(d => d.id === deviceId).online, true);
-    assert.equal(online.find(d => d.id === device2Id).online, true);
-
-    const rx1 = await access(base + '/v1/rx/request', rxToken, 'POST',
-      { deviceId, op: 'list', path: 'DCIM/One', offset: 0, limit: 10 });
-    const rx2 = await access(base + '/v1/rx/request', rxToken, 'POST',
-      { deviceId: device2Id, op: 'list', path: 'DCIM/Two', offset: 0, limit: 10 });
-    assert.equal(rx1.status, 202);
-    assert.equal(rx2.status, 202);
-    const id1 = (await rx1.json()).id;
-    const id2 = (await rx2.json()).id;
-    const cmd1 = await (await next1).json();
-    const cmd2 = await (await next2).json();
-    assert.deepEqual([cmd1.id, cmd1.path], [id1, 'DCIM/One']);
-    assert.deepEqual([cmd2.id, cmd2.path], [id2, 'DCIM/Two']);
-
-    const cross = await access(base + '/v1/tx/result/' + id1, txToken2, 'POST',
-      { ok: true, entries: [] });
-    assert.equal(cross.status, 404);
-    const good1 = await access(base + '/v1/tx/result/' + id1, txToken, 'POST',
-      { ok: true, entries: [{ name: 'one' }] });
-    const good2 = await access(base + '/v1/tx/result/' + id2, txToken2, 'POST',
-      { ok: true, entries: [{ name: 'two' }] });
-    assert.equal(good1.status, 200);
-    assert.equal(good2.status, 200);
-    const out1 = await access(base + '/v1/rx/result/' + id1, rxToken);
-    const out2 = await access(base + '/v1/rx/result/' + id2, rxToken);
-    assert.equal((await out1.json()).entries[0].name, 'one');
-    assert.equal((await out2.json()).entries[0].name, 'two');
-    const oldGlobal = await access(base + '/v1/tx/next', rootTxToken);
-    assert.equal(oldGlobal.status, 401);
-  }));
-
-
-test('notification-free heartbeat never enables file transfer', async () =>
-  withRelay(async base => {
-    const unauthorized = await access(base + '/v1/tx/heartbeat', 'bad-token', 'POST');
-    assert.equal(unauthorized.status, 401);
-    const checkIn = await access(base + '/v1/tx/heartbeat', txToken, 'POST');
-    assert.equal(checkIn.status, 200);
-    assert.deepEqual(await checkIn.json(), {ok:true});
-    const current = await access(base + '/v1/rx/devices', rxToken);
-    assert.equal(current.status, 200);
-    const { devices } = await current.json();
-    assert.equal(devices.length, 1);
-    assert.equal(devices[0].id, deviceId);
-    assert.equal(devices[0].online, false);
-    assert.ok(devices[0].lastCheckIn > 0);
-    const blocked = await access(base + '/v1/rx/request', rxToken, 'POST',
-      {deviceId, op:'list', path:'', offset:0, limit:10});
-    assert.equal(blocked.status, 409);
-  }));

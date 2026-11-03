@@ -13,14 +13,13 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** The public relay address is built in. No token is embedded in the APK. */
-data class RelayConfig(val baseUrl: String, val txToken: String, val deviceId: String) {
+data class RelayConfig(val baseUrl: String, val txToken: String) {
     init {
         val uri = URI(baseUrl)
         require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "È richiesto HTTPS" }
         require(uri.userInfo == null && uri.query == null && uri.fragment == null &&
             (uri.path.isNullOrEmpty() || uri.path == "/")) { "Indirizzo server non valido" }
-        require(txToken.length in 32..256) { "Chiave dispositivo non valida" }
-        require(deviceId.matches(Regex("[0-9a-f-]{36}"))) { "Identità dispositivo non valida" }
+        require(txToken.length in 32..256) { "Chiave TX non valida" }
     }
     fun endpoint(path: String) = baseUrl.trimEnd('/') + path
 }
@@ -31,39 +30,38 @@ object SecureRelaySettings {
     private const val STORAGE = "tx_secure_v1"
     private const val KEY_ALIAS = "tx_relay_aes_v1"
 
-    fun save(context: Context, deviceId: String, txToken: String) {
-        RelayConfig(RELAY_URL, txToken, deviceId)
+    fun save(context: Context, txToken: String) {
+        RelayConfig(RELAY_URL, txToken)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        cipher.updateAAD(deviceId.toByteArray(StandardCharsets.UTF_8))
         val encrypted = cipher.doFinal(txToken.toByteArray(StandardCharsets.UTF_8))
         val prefs = context.getSharedPreferences(STORAGE, Context.MODE_PRIVATE)
         check(prefs.edit().putString("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString("device_id", deviceId).commit()) {
+            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)).commit()) {
             "Impossibile salvare la chiave"
         }
     }
 
     fun load(context: Context): RelayConfig? {
         val prefs = context.getSharedPreferences(STORAGE, Context.MODE_PRIVATE)
-        // Version 0.4 and earlier used a shared TX token. Never reuse it for multi-device routing.
-        val deviceId = prefs.getString("device_id", null) ?: return null
         val iv = prefs.getString("iv", null) ?: return null
         val ciphertext = prefs.getString("ciphertext", null) ?: return null
         return runCatching {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
-            cipher.updateAAD(deviceId.toByteArray(StandardCharsets.UTF_8))
             val token = String(cipher.doFinal(Base64.decode(ciphertext, Base64.NO_WRAP)), StandardCharsets.UTF_8)
-            RelayConfig(RELAY_URL, token, deviceId)
+            RelayConfig(RELAY_URL, token)
         }.getOrNull()
     }
 
     /** Migrate 0.2's unencrypted preferences once, then clear the old copy. */
     fun migrateLegacy(context: Context) {
         val old = context.getSharedPreferences("tx_relay_v1", Context.MODE_PRIVATE)
-        // Legacy shared credentials must be replaced by a fresh RX-approved device identity.
+        val token = old.getString("token", null)
+        val url = old.getString("url", null)
+        if (load(context) == null && url?.trimEnd('/') == RELAY_URL && token != null) {
+            runCatching { save(context, token) }
+        }
         old.edit().clear().commit()
     }
 
