@@ -89,6 +89,10 @@ class RelayWorker(
                 val chunk = catalog.readChunk(path, command.getLong("offset"), command.getInt("length"))
                 JSONObject().put("ok", true)
                     .put("base64", Base64.encodeToString(chunk.bytes, Base64.NO_WRAP))
+                    .put("sha256", java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(chunk.bytes).joinToString("") {
+                            "%02x".format(it.toInt() and 0xff)
+                        })
                     .put("totalBytes", chunk.totalBytes)
                     .put("nextOffset", chunk.nextOffset)
                     .put("complete", chunk.complete)
@@ -102,7 +106,7 @@ class RelayWorker(
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12_000
-            readTimeout = 32_000
+            readTimeout = 75_000
             setRequestProperty("Authorization", "Bearer ${config.txToken}")
             setRequestProperty("Accept", "application/json")
             instanceFollowRedirects = false
@@ -115,7 +119,7 @@ class RelayWorker(
         try {
             if (body != null) {
                 val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
-                require(bytes.size <= 160_000) { "Risposta troppo grande" }
+                require(bytes.size <= 800_000) { "Risposta troppo grande" }
                 conn.outputStream.use { it.write(bytes) }
             }
             val code = conn.responseCode

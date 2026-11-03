@@ -1,6 +1,7 @@
 package it.osmus.rx.remote
 
 import android.util.Base64
+import it.osmus.rx.TransferIntegrity
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -18,6 +19,10 @@ data class RemoteFile(
 data class DirectoryPage(val entries: List<RemoteFile>, val hasMore: Boolean)
 
 class RxApi(private val credentials: Credentials) {
+    // One 512 KiB request replaces eight 64 KiB HTTP round trips.
+    // Automatically fall back when an older TX/relay supports only 64 KiB.
+    private var maxReadBytes = FAST_READ_BYTES
+
     fun pending(): List<PendingPair> {
         val response = request("GET", "/v1/pair/pending")
         val items = response.getJSONArray("requests")
@@ -63,7 +68,7 @@ class RxApi(private val credentials: Credentials) {
         val result = call(JSONObject().put("op", "preview").put("path", path)
             .put("offset", 0))
         val decoded = Base64.decode(result.getString("base64"), Base64.DEFAULT)
-        if (decoded.size > 100_000 || decoded.isEmpty()) throw IOException("Immagine non valida")
+        if (decoded.size > 110_000 || decoded.isEmpty()) throw IOException("Immagine non valida")
         return decoded
     }
 
@@ -88,20 +93,63 @@ class RxApi(private val credentials: Credentials) {
                            val total: Long, val complete: Boolean)
 
     fun read(path: String, offset: Long): RemoteChunk {
-        val result = call(JSONObject().put("op", "read").put("path", path)
-            .put("offset", offset).put("length", 65_536))
+        fun request(length: Int): JSONObject =
+            call(JSONObject().put("op", "read").put("path", path)
+                .put("offset", offset).put("length", length))
+        val result = try {
+            request(maxReadBytes)
+        } catch (error: IOException) {
+            val detail = error.message.orEmpty()
+            // Either the relay rejected the new limit (400), or an older TX
+            // FileCatalog rejected a larger block. Never retry a different file.
+            val legacyLimit = detail.contains("HTTP 400") ||
+                detail.contains("Dimensione blocco non valida")
+            if (maxReadBytes == FAST_READ_BYTES && legacyLimit) {
+                maxReadBytes = LEGACY_READ_BYTES
+                request(maxReadBytes)
+            } else throw error
+        }
         val bytes = Base64.decode(result.getString("base64"), Base64.DEFAULT)
         val next = result.getLong("nextOffset")
         val total = result.getLong("totalBytes")
         val complete = result.getBoolean("complete")
-        if (bytes.size > 65_536 || next != offset + bytes.size || total < next ||
+        if (bytes.size > maxReadBytes || next != offset + bytes.size || total < next ||
             (!complete && bytes.isEmpty()) || (complete && next != total)) {
             throw IOException("Blocco file non valido")
+        }
+        // Supports previously installed TX versions; new TX always supplies the hash.
+        if (result.has("sha256")) {
+            val expected = result.getString("sha256")
+            if (!expected.matches(Regex("[0-9a-f]{64}")) ||
+                expected != TransferIntegrity.sha256(bytes)) {
+                throw IOException("Dati ricevuti danneggiati: controllo integrità fallito")
+            }
         }
         return RemoteChunk(bytes, next, total, complete)
     }
 
     private fun call(operation: JSONObject): JSONObject {
+        val thumbnail = operation.optString("op") == "thumb"
+        return RemoteRequestGate.run(priority = !thumbnail) {
+            // A single TX handles requests sequentially. Keep at most one in-flight
+            // request; skip low-priority thumbnails if the relay reports queue pressure.
+            var pauseMs = 1_000L
+            var lastBusy: IOException? = null
+            repeat(if (thumbnail) 1 else 16) {
+                try {
+                    return@run callOnce(operation)
+                } catch (error: ServerBusyException) {
+                    if (thumbnail) throw IOException("Miniatura rinviata: server occupato", error)
+                    lastBusy = error
+                    Thread.sleep(pauseMs)
+                    pauseMs = (pauseMs * 2).coerceAtMost(12_000L)
+                }
+            }
+            throw IOException("Server ancora occupato. Riprova quando TX è raggiungibile", lastBusy)
+        }
+    }
+
+    private fun callOnce(operation: JSONObject): JSONObject {
         val job = request("POST", "/v1/rx/request", operation)
         val id = job.getString("id")
         require(ID.matches(id)) { "ID richiesta non valido" }
@@ -120,7 +168,8 @@ class RxApi(private val credentials: Credentials) {
         val conn = (URL(RxSecrets.URL + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12_000
-            readTimeout = 32_000
+            // 512 KiB binary result may need longer over mobile data.
+            readTimeout = 75_000
             instanceFollowRedirects = false
             setRequestProperty("Authorization", "Bearer " + credentials.rxToken)
             setRequestProperty("Accept", "application/json")
@@ -136,12 +185,12 @@ class RxApi(private val credentials: Credentials) {
                 conn.outputStream.use { it.write(bytes) }
             }
             val code = conn.responseCode
+            if (code == 429) throw ServerBusyException()
             if (code !in 200..299) {
                 throw IOException(when (code) {
                     401 -> "Chiave RX non valida"
                     403 -> "Autorizzazione negata"
                     404, 410 -> "Richiesta scaduta, riprova"
-                    429 -> "Server occupato, riprova"
                     else -> "Errore server HTTP " + code
                 })
             }
@@ -151,7 +200,7 @@ class RxApi(private val credentials: Credentials) {
                 while (true) {
                     val count = reader.read(chars)
                     if (count < 0) break
-                    if (output.length + count > 256_000) throw IOException("Risposta troppo grande")
+                    if (output.length + count > 800_000) throw IOException("Risposta troppo grande")
                     output.append(chars, 0, count)
                 }
                 output.toString()
@@ -162,7 +211,11 @@ class RxApi(private val credentials: Credentials) {
         }
     }
 
+    private class ServerBusyException : IOException("Server occupato")
+
     companion object {
+        private const val LEGACY_READ_BYTES = 64 * 1024
+        private const val FAST_READ_BYTES = 512 * 1024
         private val ID = Regex("[0-9a-f-]{36}")
     }
 }

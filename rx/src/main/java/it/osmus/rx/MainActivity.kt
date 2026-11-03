@@ -2,8 +2,10 @@ package it.osmus.rx
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
@@ -12,6 +14,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.GridLayout
@@ -23,6 +27,7 @@ import it.osmus.rx.remote.Credentials
 import it.osmus.rx.remote.PendingPair
 import it.osmus.rx.remote.RemoteFile
 import it.osmus.rx.remote.RxApi
+import it.osmus.rx.remote.RemoteRequestGate
 import it.osmus.rx.remote.RxSecrets
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -32,6 +37,7 @@ class MainActivity : Activity() {
     private val pairWorker = Executors.newSingleThreadExecutor()
     private val ioWorker = Executors.newSingleThreadExecutor()
     private val thumbs = Executors.newFixedThreadPool(2)
+    private val previewWorker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
     private lateinit var content: LinearLayout
@@ -46,7 +52,6 @@ class MainActivity : Activity() {
     private var loading = false
     private var downloading = false
     @Volatile private var cancelled = false
-    private var selected: RemoteFile? = null
     private var visible = false
 
     private val autoRefresh = object : Runnable {
@@ -112,6 +117,7 @@ class MainActivity : Activity() {
         pairWorker.shutdownNow()
         ioWorker.shutdownNow()
         thumbs.shutdownNow()
+        previewWorker.shutdownNow()
         super.onDestroy()
     }
 
@@ -334,30 +340,75 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Full-screen overlay: closing preserves gallery scroll and loaded entries. */
     private fun showGalleryPreview(item: RxApi.GalleryItem, credentials: Credentials) {
+        if (downloading) return
+        val dialog = Dialog(this, android.R.style.Theme_Material_NoActionBar_Fullscreen)
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(20), dp(14), dp(20))
+            setBackgroundColor(BG)
+        }
+        val header = horizontal()
+        header.addView(label(item.name, 16f, Color.WHITE, true).apply {
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(button("✕", true) { dialog.dismiss() },
+            LinearLayout.LayoutParams(dp(60), dp(52)))
+        shell.addView(header)
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(BG)
+            setBackgroundColor(Color.BLACK)
             setImageResource(android.R.drawable.ic_menu_gallery)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.65).toInt())
+            contentDescription = "Anteprima di " + item.name
         }
-        val dialog = AlertDialog.Builder(this).setTitle(item.name)
-            .setView(image)
-            .setNegativeButton("CHIUDI", null)
-            .setPositiveButton("SCARICA") { _, _ ->
-                chooseDownload(RemoteFile(item.path, item.name, false, false,
-                    item.size, item.modified))
-            }.create()
+        shell.addView(image, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val message = label("Caricamento anteprima…", 14f, GREY).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(12), dp(8), dp(12))
+        }
+        shell.addView(message)
+        lateinit var save: Button
+        val remote = RemoteFile(item.path, item.name, false, false,
+            item.size, item.modified)
+        save = button("SALVA") { if (!downloading) download(remote, message, save) }
+        shell.addView(save, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(60)))
+        dialog.setContentView(shell)
+        var displayed: Bitmap? = null
+        dialog.setOnDismissListener {
+            image.setImageDrawable(null)
+            displayed?.recycle()
+            displayed = null
+        }
         dialog.show()
-        thumbs.execute {
-            val bitmap = runCatching {
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT)
+        previewWorker.execute {
+            val result = runCatching {
                 val bytes = RxApi(credentials).preview(item.path)
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }.getOrNull()
-            if (bitmap != null) ui {
-                if (dialog.isShowing) image.setImageBitmap(bitmap) else bitmap.recycle()
+                    ?: throw IOException("Immagine non decodificabile")
+            }.recoverCatching {
+                val bytes = RxApi(credentials).thumbnail(item.path)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IOException("Anteprima non decodificabile")
+            }
+            ui {
+                if (dialog.isShowing) {
+                    result.onSuccess { bitmap ->
+                        displayed?.recycle()
+                        displayed = bitmap
+                        image.setImageBitmap(bitmap)
+                        message.text = if (item.type == "video") "Anteprima video" else ""
+                    }.onFailure { error ->
+                        message.text = "Anteprima non disponibile: " +
+                            (error.message ?: "errore sconosciuto") +
+                            ". Puoi comunque premere SALVA."
+                    }
+                } else result.getOrNull()?.recycle()
             }
         }
     }
@@ -440,7 +491,18 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.setOnClickListener {
             if (downloading) return@setOnClickListener
-            if (file.directory) files(file.path) else chooseDownload(file)
+            if (file.directory) {
+                files(file.path)
+            } else {
+                val mime = RemoteNames.mimeType(file.name)
+                val credentials = RxSecrets.load(this)
+                if (credentials != null &&
+                    (mime.startsWith("image/") || mime.startsWith("video/"))) {
+                    showGalleryPreview(RxApi.GalleryItem(file.path, file.name,
+                        if (mime.startsWith("video/")) "video" else "image",
+                        file.size, file.modified), credentials)
+                } else chooseDownload(file)
+            }
         }
         list.addView(row)
         list.addView(space(5))
@@ -448,83 +510,138 @@ class MainActivity : Activity() {
 
     private fun chooseDownload(file: RemoteFile) {
         AlertDialog.Builder(this).setTitle(file.name)
-            .setMessage(prettySize(file.size))
-            .setNegativeButton("Annulla", null)
-            .setPositiveButton("SCARICA") { _, _ ->
-                selected = file
-                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = RemoteNames.mimeType(file.name)
-                    putExtra(Intent.EXTRA_TITLE, RemoteNames.safeName(file.name))
-                }, SAVE_REQUEST)
-            }.show()
+            .setMessage("Salvare " + prettySize(file.size) + " sul telefono RX?")
+            .setNegativeButton("ANNULLA", null)
+            .setPositiveButton("SALVA") { _, _ -> download(file) }
+            .show()
     }
 
-    @Deprecated("Uses Android's built-in document picker")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SAVE_REQUEST) {
-            val file = selected
-            selected = null
-            if (resultCode == RESULT_OK && file != null && data?.data != null)
-                download(file, data.data!!)
-        }
-    }
-
-    private fun download(file: RemoteFile, destination: Uri) {
-        val c = RxSecrets.load(this) ?: return setup()
+    /**
+     * Download the original file, not the JPEG preview. Read a verified TX block
+     * before creating any MediaStore item (avoids broken empty photo placeholders).
+     * The file stays pending until its byte checksum AND image decoder both pass.
+     */
+    private fun download(file: RemoteFile, previewMessage: TextView? = null,
+                         saveButton: Button? = null) {
+        if (downloading) return
+        val credentials = RxSecrets.load(this) ?: return setup()
         downloading = true
+        RemoteRequestGate.setTransferActive(true)
         cancelled = false
+        saveButton?.isEnabled = false
         status.text = "Download: " + file.name
+        previewMessage?.text = "Connessione al file originale…"
         val cancel = button("ANNULLA DOWNLOAD", true) { cancelled = true }
         content.addView(cancel)
+        val store = RxMediaStore(applicationContext.contentResolver)
         ioWorker.execute {
-            var finished = false
+            var destination: RxMediaStore.Destination? = null
+            var published = false
             try {
-                contentResolver.openOutputStream(destination, "w").use { output ->
-                    if (output == null) throw IOException("Destinazione non disponibile")
-                    val api = RxApi(c)
-                    var offset = 0L
-                    var total = -1L
-                    var lastProgress = 0L
+                val api = RxApi(credentials)
+                // If the relay is busy or TX is unreachable, nothing is saved yet.
+                var chunk = api.read(file.path, 0L)
+                if (cancelled || Thread.currentThread().isInterrupted)
+                    throw IOException("Download annullato")
+                val sourceBytes = chunk.total
+                val actualName = if (RemoteNames.mimeType(file.name).startsWith("image/")) {
+                    ImageSignature.saveName(file.name, chunk.bytes)
+                } else file.name
+                // Renaming the extension does not change the image data.
+                destination = store.create(actualName)
+                val target = destination
+                val writtenHash = java.security.MessageDigest.getInstance("SHA-256")
+                var received = 0L
+                var lastProgress = 0L
+                val downloadStartedMs = android.os.SystemClock.elapsedRealtime()
+                contentResolver.openOutputStream(target.uri, "wt").use { output ->
+                    if (output == null) throw IOException("Destinazione non scrivibile")
                     while (true) {
                         if (cancelled || Thread.currentThread().isInterrupted)
                             throw IOException("Download annullato")
-                        val chunk = api.read(file.path, offset)
-                        if (total < 0) total = chunk.total
-                        if (total != chunk.total) throw IOException("Il file è cambiato")
+                        if (chunk.total != sourceBytes)
+                            throw IOException("Il file originale è cambiato durante il download")
+                        if (chunk.nextOffset != received + chunk.bytes.size)
+                            throw IOException("Sequenza blocchi non valida")
                         output.write(chunk.bytes)
-                        offset = chunk.nextOffset
+                        writtenHash.update(chunk.bytes)
+                        received = chunk.nextOffset
                         val now = System.currentTimeMillis()
                         if (now - lastProgress > 400 || chunk.complete) {
                             lastProgress = now
-                            val percent = if (total == 0L) 100L else offset * 100L / total
-                            ui { status.text = "Download · " + percent + "%" }
+                            val pct = if (sourceBytes == 0L) 100L else received * 100L / sourceBytes
+                            val elapsedMs = (android.os.SystemClock.elapsedRealtime() -
+                                downloadStartedMs).coerceAtLeast(1L)
+                            val transferSpeed = received * 1000L / elapsedMs
+                            val progress = "Download · " + pct + "% · " +
+                                prettySize(transferSpeed) + "/s"
+                            ui {
+                                status.text = progress
+                                previewMessage?.text = progress
+                            }
                         }
-                        if (chunk.complete) break
+                        if (chunk.complete) {
+                            if (received != sourceBytes) throw IOException("File incompleto")
+                            break
+                        }
+                        // The next block is requested only after the previous one
+                        // has been written; retries never append duplicate bytes.
+                        chunk = api.read(file.path, received)
                     }
                     output.flush()
                 }
-                finished = true
+                if (cancelled || Thread.currentThread().isInterrupted)
+                    throw IOException("Download annullato")
                 ui {
-                    status.text = "Salvato: " + file.name
-                    AlertDialog.Builder(this).setMessage("Download completato")
-                        .setNegativeButton("Chiudi", null)
+                    status.text = "Verifica integrità…"
+                    previewMessage?.text = "Verifica integrità…"
+                }
+                val saved = contentResolver.openInputStream(target.uri)
+                    ?: throw IOException("File salvato non leggibile")
+                TransferIntegrity.verifySaved(saved, sourceBytes, writtenHash.digest())
+                if (RemoteNames.mimeType(actualName).startsWith("image/")) {
+                    // Do not publish an image just because its byte count matched.
+                    PhotoVerifier.verifySavedImage(contentResolver, target.uri)
+                }
+                store.publish(target)
+                published = true
+                ui {
+                    status.text = "Salvato e verificato: " + actualName
+                    previewMessage?.text = "Salvato: " + target.relativePath + actualName
+                    AlertDialog.Builder(this)
+                        .setTitle("File originale salvato")
+                        .setMessage(actualName + "\n" + prettySize(sourceBytes) +
+                            "\n\nCartella: " + target.relativePath)
+                        .setNegativeButton("CHIUDI", null)
                         .setPositiveButton("APRI") { _, _ ->
                             runCatching {
                                 startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(destination, RemoteNames.mimeType(file.name))
+                                    setDataAndType(target.uri, RemoteNames.mimeType(actualName))
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 })
-                            }.onFailure { status.text = "Nessuna app disponibile per aprire il file" }
+                            }.onFailure {
+                                status.text = "File salvato, ma nessuna app lo può aprire"
+                            }
                         }.show()
                 }
-            } catch (e: Exception) {
-                if (!finished) runCatching { contentResolver.delete(destination, null, null) }
-                ui { status.text = safeError(e) }
+            } catch (error: Exception) {
+                // Avoid leaving a broken/empty photo visible in the gallery.
+                if (!published) destination?.let { runCatching { store.discard(it) } }
+                ui {
+                    val detail = error.message ?: "errore sconosciuto"
+                    status.text = "Download non riuscito: " + detail
+                    previewMessage?.text = "Non salvato: " + detail
+                    AlertDialog.Builder(this)
+                        .setTitle("File non salvato")
+                        .setMessage(detail + "\n\nNon è stato pubblicato un file incompleto.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
             } finally {
+                RemoteRequestGate.setTransferActive(false)
                 ui {
                     downloading = false
+                    saveButton?.isEnabled = true
                     content.removeView(cancel)
                     if ((mode == 2 || mode == 3) && hasMore && !loading) {
                         if (mode == 3) nextGalleryPage() else nextPage()
@@ -596,7 +713,6 @@ class MainActivity : Activity() {
     }
 
     companion object {
-        private const val SAVE_REQUEST = 501
         private val BG = Color.rgb(11, 17, 30)
         private val PANEL = Color.rgb(25, 37, 57)
         private val BLUE = Color.rgb(116, 192, 238)

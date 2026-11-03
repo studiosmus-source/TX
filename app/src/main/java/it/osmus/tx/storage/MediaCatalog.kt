@@ -3,6 +3,7 @@ package it.osmus.tx.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.media.ThumbnailUtils
 import android.os.Bundle
 import android.provider.MediaStore
@@ -72,32 +73,58 @@ class MediaCatalog(private val context: Context, root: File) {
         }
         val extension = file.extension.lowercase()
         val video = extension in setOf("mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi")
-        val image = extension in setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp")
+        val image = extension in setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "avif")
         require(video || image) { "Anteprima non supportata" }
-        val side = if (large) 960 else 240
-        val maxBytes = if (large) 100_000 else MAX_THUMB
+        val side = if (large) 1440 else 240
+        // 110 KB JPEG -> ~147 KB base64, still below the relay's 160 KB result limit.
+        val maxBytes = if (large) 110_000 else MAX_THUMB
         val bitmap = try {
-            if (video) ThumbnailUtils.createVideoThumbnail(file, Size(side, side), null)
-            else ThumbnailUtils.createImageThumbnail(file, Size(side, side), null)
+            if (video) {
+                ThumbnailUtils.createVideoThumbnail(file, Size(side, side), null)
+            } else {
+                runCatching {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                        val width = info.size.width
+                        val height = info.size.height
+                        val longest = maxOf(width, height)
+                        if (longest > side) {
+                            val ratio = side.toFloat() / longest
+                            decoder.setTargetSize(maxOf(1, (width * ratio).toInt()),
+                                maxOf(1, (height * ratio).toInt()))
+                        }
+                    }
+                }.getOrElse {
+                    ThumbnailUtils.createImageThumbnail(file, Size(side, side), null)
+                }
+            }
         } catch (error: Exception) {
-            throw IOException("Anteprima non disponibile", error)
+            throw IOException("Anteprima non disponibile: " + (error.message ?: "decodifica"), error)
         }
+        var working = bitmap
         try {
             val bytes = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 65, bytes)
-            if (bytes.size() <= maxBytes) return bytes.toByteArray()
-            bytes.reset()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 35, bytes)
-            if (bytes.size() <= maxBytes) return bytes.toByteArray()
-            val smallerSide = if (large) 600 else 144
-            val smaller = Bitmap.createScaledBitmap(bitmap, smallerSide, smallerSide, true)
-            try {
-                bytes.reset()
-                smaller.compress(Bitmap.CompressFormat.JPEG, 35, bytes)
-                if (bytes.size() > maxBytes) throw IOException("Anteprima troppo grande")
-                return bytes.toByteArray()
-            } finally { if (smaller !== bitmap) smaller.recycle() }
-        } finally { bitmap.recycle() }
+            repeat(5) {
+                for (quality in intArrayOf(85, 72, 60, 48, 36)) {
+                    bytes.reset()
+                    if (!working.compress(Bitmap.CompressFormat.JPEG, quality, bytes))
+                        throw IOException("Impossibile generare il JPEG")
+                    if (bytes.size() <= maxBytes) return bytes.toByteArray()
+                }
+                if (working.width <= 144 || working.height <= 144) {
+                    throw IOException("Anteprima troppo grande per il collegamento")
+                }
+                val reduced = Bitmap.createScaledBitmap(working,
+                    maxOf(1, working.width * 3 / 4),
+                    maxOf(1, working.height * 3 / 4), true)
+                if (working !== bitmap) working.recycle()
+                working = reduced
+            }
+            throw IOException("Anteprima troppo grande per il collegamento")
+        } finally {
+            if (working !== bitmap) working.recycle()
+            bitmap.recycle()
+        }
     }
 
     private fun safePath(path: String): String? = runCatching {

@@ -71,5 +71,5 @@ class FileCatalog(root: File) {
         return resolved
     }
 
-    companion object { const val MAX_CHUNK = 64 * 1024 }
+    companion object { const val MAX_CHUNK = 512 * 1024 }
 }

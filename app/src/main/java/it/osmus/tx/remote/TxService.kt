@@ -23,7 +23,13 @@ class TxService : Service() {
     override fun onCreate() {
         super.onCreate()
         val notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notifications.createNotificationChannel(NotificationChannel(CHANNEL, "GALLERY - Accesso remoto", NotificationManager.IMPORTANCE_LOW))
+        notifications.createNotificationChannel(NotificationChannel(
+            CHANNEL, "GALLERY - Collegamento", NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            setSound(null, null)
+            enableVibration(false)
+            setShowBadge(false)
+        })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -41,9 +47,12 @@ class TxService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = Notification.Builder(this, CHANNEL)
-            .setContentTitle("GALLERY • Accesso remoto attivo")
-            .setContentText("La memoria condivisa è consultabile dal dispositivo autorizzato")
+            .setContentTitle("GALLERY")
+            .setContentText("Connesso in sicurezza")
             .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setContentIntent(notificationIntent)
             .build()

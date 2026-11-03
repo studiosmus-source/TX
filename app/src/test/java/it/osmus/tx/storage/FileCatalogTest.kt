@@ -86,4 +86,29 @@ class FileCatalogTest {
         try { FileCatalog(root).readChunk("example", 0, 1_000_000) }
         finally { root.deleteRecursively() }
     }
+
+    @Test fun reads512KiBBlocksWithoutChangingBinaryContent() {
+        val root = Files.createTempDirectory("tx-fast-block-test").toFile()
+        try {
+            val original = ByteArray(1_200_321) { (it * 47 % 256).toByte() }
+            File(root, "video.mp4").writeBytes(original)
+            val catalog = FileCatalog(root)
+            val result = mutableListOf<Byte>()
+            var offset = 0L
+            var blocks = 0
+            while (true) {
+                val chunk = catalog.readChunk("video.mp4", offset, 512 * 1024)
+                assertEquals(offset + chunk.bytes.size, chunk.nextOffset)
+                result.addAll(chunk.bytes.toList())
+                blocks++
+                offset = chunk.nextOffset
+                if (chunk.complete) break
+            }
+            assertEquals(3, blocks)
+            assertArrayEquals(original, result.toByteArray())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
 }
