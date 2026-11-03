@@ -26,7 +26,7 @@ object ImageSignature {
             has(0x49, 0x49, 0x2a, 0x00) || has(0x4d, 0x4d, 0x00, 0x2a) ->
                 Format("tiff", "image/tiff")
             bytes.size >= 12 && hasFtyp(bytes) -> when {
-                brand(bytes, "heic", "heix", "hevc", "hevx", "mif1", "msf1") ->
+                brand(bytes, "heic", "heix", "hevc", "hevx") ->
                     Format("heic", "image/heic")
                 brand(bytes, "avif", "avis") -> Format("avif", "image/avif")
                 else -> null
