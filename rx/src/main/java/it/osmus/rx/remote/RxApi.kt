@@ -110,16 +110,18 @@ class RxApi(private val credentials: Credentials) {
         return RemoteChunk(bytes, next, total, complete)
     }
 
-    private fun call(operation: JSONObject): JSONObject =
-        RemoteRequestGate.run(priority = operation.optString("op") != "thumb") {
-            // Busy means the finite relay queue is full (often older thumbnail jobs).
-            // Do not create new jobs during backoff, and never bypass the priority gate.
+    private fun call(operation: JSONObject): JSONObject {
+        val thumbnail = operation.optString("op") == "thumb"
+        return RemoteRequestGate.run(priority = !thumbnail) {
+            // A single TX handles requests sequentially. Keep at most one in-flight
+            // request; skip low-priority thumbnails if the relay reports queue pressure.
             var pauseMs = 1_000L
             var lastBusy: IOException? = null
-            repeat(8) {
+            repeat(if (thumbnail) 1 else 16) {
                 try {
                     return@run callOnce(operation)
                 } catch (error: ServerBusyException) {
+                    if (thumbnail) throw IOException("Miniatura rinviata: server occupato", error)
                     lastBusy = error
                     Thread.sleep(pauseMs)
                     pauseMs = (pauseMs * 2).coerceAtMost(12_000L)
@@ -127,6 +129,7 @@ class RxApi(private val credentials: Credentials) {
             }
             throw IOException("Server ancora occupato. Riprova quando TX è raggiungibile", lastBusy)
         }
+    }
 
     private fun callOnce(operation: JSONObject): JSONObject {
         val job = request("POST", "/v1/rx/request", operation)
@@ -169,7 +172,6 @@ class RxApi(private val credentials: Credentials) {
                     401 -> "Chiave RX non valida"
                     403 -> "Autorizzazione negata"
                     404, 410 -> "Richiesta scaduta, riprova"
-                    429 -> "Server occupato, riprova"
                     else -> "Errore server HTTP " + code
                 })
             }
