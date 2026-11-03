@@ -69,7 +69,11 @@ class RelayWorker(
                     .put("total", page.total).put("hasMore", page.hasMore)
             }
             "gallery" -> {
-                val page = media.gallery(command.getInt("offset"), command.getInt("limit"))
+                val page = if (path == ".nomedia") {
+                    media.nomediaGallery(command.getInt("offset"), command.getInt("limit"))
+                } else {
+                    media.gallery(command.getInt("offset"), command.getInt("limit"))
+                }
                 val entries = JSONArray()
                 page.entries.forEach { item ->
                     entries.put(JSONObject().put("path", item.path)
