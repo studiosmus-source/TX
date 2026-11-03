@@ -2,8 +2,10 @@ package it.osmus.rx
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
@@ -12,6 +14,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.GridLayout
@@ -32,6 +36,7 @@ class MainActivity : Activity() {
     private val pairWorker = Executors.newSingleThreadExecutor()
     private val ioWorker = Executors.newSingleThreadExecutor()
     private val thumbs = Executors.newFixedThreadPool(2)
+    private val previewWorker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
     private lateinit var content: LinearLayout
@@ -112,6 +117,7 @@ class MainActivity : Activity() {
         pairWorker.shutdownNow()
         ioWorker.shutdownNow()
         thumbs.shutdownNow()
+        previewWorker.shutdownNow()
         super.onDestroy()
     }
 
@@ -334,30 +340,75 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Full-screen overlay: closing preserves gallery scroll and loaded entries. */
     private fun showGalleryPreview(item: RxApi.GalleryItem, credentials: Credentials) {
+        if (downloading) return
+        val dialog = Dialog(this, android.R.style.Theme_Material_NoActionBar_Fullscreen)
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(20), dp(14), dp(20))
+            setBackgroundColor(BG)
+        }
+        val header = horizontal()
+        header.addView(label(item.name, 16f, Color.WHITE, true).apply {
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(button("✕", true) { dialog.dismiss() },
+            LinearLayout.LayoutParams(dp(60), dp(52)))
+        shell.addView(header)
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(BG)
+            setBackgroundColor(Color.BLACK)
             setImageResource(android.R.drawable.ic_menu_gallery)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.65).toInt())
+            contentDescription = "Anteprima di " + item.name
         }
-        val dialog = AlertDialog.Builder(this).setTitle(item.name)
-            .setView(image)
-            .setNegativeButton("CHIUDI", null)
-            .setPositiveButton("SCARICA") { _, _ ->
-                chooseDownload(RemoteFile(item.path, item.name, false, false,
-                    item.size, item.modified))
-            }.create()
+        shell.addView(image, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val message = label("Caricamento anteprima…", 14f, GREY).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(12), dp(8), dp(12))
+        }
+        shell.addView(message)
+        lateinit var save: Button
+        val remote = RemoteFile(item.path, item.name, false, false,
+            item.size, item.modified)
+        save = button("SALVA") { if (!downloading) download(remote, message, save) }
+        shell.addView(save, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(60)))
+        dialog.setContentView(shell)
+        var displayed: Bitmap? = null
+        dialog.setOnDismissListener {
+            image.setImageDrawable(null)
+            displayed?.recycle()
+            displayed = null
+        }
         dialog.show()
-        thumbs.execute {
-            val bitmap = runCatching {
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT)
+        previewWorker.execute {
+            val result = runCatching {
                 val bytes = RxApi(credentials).preview(item.path)
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }.getOrNull()
-            if (bitmap != null) ui {
-                if (dialog.isShowing) image.setImageBitmap(bitmap) else bitmap.recycle()
+                    ?: throw IOException("Immagine non decodificabile")
+            }.recoverCatching {
+                val bytes = RxApi(credentials).thumbnail(item.path)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IOException("Anteprima non decodificabile")
+            }
+            ui {
+                if (dialog.isShowing) {
+                    result.onSuccess { bitmap ->
+                        displayed?.recycle()
+                        displayed = bitmap
+                        image.setImageBitmap(bitmap)
+                        message.text = if (item.type == "video") "Anteprima video" else ""
+                    }.onFailure { error ->
+                        message.text = "Anteprima non disponibile: " +
+                            (error.message ?: "errore sconosciuto") +
+                            ". Puoi comunque premere SALVA."
+                    }
+                } else result.getOrNull()?.recycle()
             }
         }
     }
@@ -440,7 +491,18 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.setOnClickListener {
             if (downloading) return@setOnClickListener
-            if (file.directory) files(file.path) else chooseDownload(file)
+            if (file.directory) {
+                files(file.path)
+            } else {
+                val mime = RemoteNames.mimeType(file.name)
+                val credentials = RxSecrets.load(this)
+                if (credentials != null &&
+                    (mime.startsWith("image/") || mime.startsWith("video/"))) {
+                    showGalleryPreview(RxApi.GalleryItem(file.path, file.name,
+                        if (mime.startsWith("video/")) "video" else "image",
+                        file.size, file.modified), credentials)
+                } else chooseDownload(file)
+            }
         }
         list.addView(row)
         list.addView(space(5))
