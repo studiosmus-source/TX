@@ -100,6 +100,7 @@ class NomediaCatalog(root: File) {
         private const val MAX_DIRECTORIES = 20_000
         private const val MAX_ENTRIES = 150_000
         private const val MAX_RESULTS = 20_000
+        private const val MAX_SCAN_NANOS = 18_000_000_000L
         private val IMAGES = setOf("jpg", "jpeg", "png", "webp", "gif", "heic",
             "heif", "bmp", "avif")
         private val VIDEOS = setOf("mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi")
