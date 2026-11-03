@@ -119,7 +119,7 @@ class RelayWorker(
         try {
             if (body != null) {
                 val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
-                require(bytes.size <= 160_000) { "Risposta troppo grande" }
+                require(bytes.size <= 800_000) { "Risposta troppo grande" }
                 conn.outputStream.use { it.write(bytes) }
             }
             val code = conn.responseCode
