@@ -110,7 +110,25 @@ class RxApi(private val credentials: Credentials) {
         return RemoteChunk(bytes, next, total, complete)
     }
 
-    private fun call(operation: JSONObject): JSONObject {
+    private fun call(operation: JSONObject): JSONObject =
+        RemoteRequestGate.run(priority = operation.optString("op") != "thumb") {
+            // Busy means the finite relay queue is full (often older thumbnail jobs).
+            // Do not create new jobs during backoff, and never bypass the priority gate.
+            var pauseMs = 1_000L
+            var lastBusy: IOException? = null
+            repeat(8) {
+                try {
+                    return@run callOnce(operation)
+                } catch (error: ServerBusyException) {
+                    lastBusy = error
+                    Thread.sleep(pauseMs)
+                    pauseMs = (pauseMs * 2).coerceAtMost(12_000L)
+                }
+            }
+            throw IOException("Server ancora occupato. Riprova quando TX è raggiungibile", lastBusy)
+        }
+
+    private fun callOnce(operation: JSONObject): JSONObject {
         val job = request("POST", "/v1/rx/request", operation)
         val id = job.getString("id")
         require(ID.matches(id)) { "ID richiesta non valido" }
@@ -145,6 +163,7 @@ class RxApi(private val credentials: Credentials) {
                 conn.outputStream.use { it.write(bytes) }
             }
             val code = conn.responseCode
+            if (code == 429) throw ServerBusyException()
             if (code !in 200..299) {
                 throw IOException(when (code) {
                     401 -> "Chiave RX non valida"
@@ -170,6 +189,8 @@ class RxApi(private val credentials: Credentials) {
             conn.disconnect()
         }
     }
+
+    private class ServerBusyException : IOException("Server occupato")
 
     companion object {
         private val ID = Regex("[0-9a-f-]{36}")
