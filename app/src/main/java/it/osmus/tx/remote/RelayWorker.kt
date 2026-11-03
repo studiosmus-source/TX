@@ -83,6 +83,7 @@ class RelayWorker(
                 JSONObject().put("ok", true).put("entries", entries)
                     .put("hasMore", page.hasMore)
                     .put("nextOffset", page.nextOffset)
+                    .put("nomedia", path == ".nomedia")
             }
             "thumb", "preview" -> {
                 val bytes = media.thumbnail(path, command.getString("op") == "preview")
