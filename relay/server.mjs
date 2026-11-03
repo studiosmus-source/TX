@@ -183,10 +183,20 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         if (!job || job.state !== 'sent') return send(res, 404, { error: 'missing' });
         const data = await receive(req, MAX_RESULT_BYTES);
         if (!data || typeof data.ok !== 'boolean') return send(res, 400, { error: 'invalid_response' });
-        job.result = data;
-        job.state = 'done';
-        for (const waiter of job.waitingRx) send(waiter, 200, data);
+        // A result handed directly to a waiting RX has already been consumed.
+        // Keeping it in pending used to leak one slot until TTL (120 seconds),
+        // causing 429 "busy" after only 16 completed thumbnail requests.
+        const liveWaiters = [...job.waitingRx].filter(waiter =>
+          !waiter.destroyed && !waiter.writableEnded);
         job.waitingRx.clear();
+        if (liveWaiters.length > 0) {
+          pending.delete(job.id);
+          for (const waiter of liveWaiters) send(waiter, 200, data);
+        } else {
+          // RX was between polls: retain the result until its next GET.
+          job.result = data;
+          job.state = 'done';
+        }
         return send(res, 200, { delivered: true });
       }
       const rxResult = /^\/v1\/rx\/result\/([0-9a-f-]{36})$/.exec(pathname);
