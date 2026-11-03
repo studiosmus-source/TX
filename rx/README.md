@@ -1,31 +1,27 @@
-# RX 0.3 + GALLERY 0.5 – più telefoni Android
+# RX Android 0.2.0
 
-Ogni telefono GALLERY ha un **ID UUID e un token dedicato** generato dal relay al momento dell'approvazione. Il token di amministrazione TX_TOKEN resta esclusivamente su RX/Render e **non viene più consegnato** a GALLERY. I token per dispositivo sono verificabili anche dopo un riavvio Render, senza archiviare le chiavi sul server.
+L'app RX è un modulo separato (:rx) nel repository TX; non richiede modifiche al relay Render.
 
-## Collegamento
-1. Installare le versioni aggiornate RX 0.3 e GALLERY 0.5 sui telefoni interessati.
-2. Le vecchie installazioni GALLERY con chiave condivisa devono essere nuovamente approvate una volta (nessun file viene cancellato).
-3. In RX, aprire **Attivazioni** e approvare ciascuna richiesta confrontando il codice sui due schermi.
-4. Nella pagina **Dispositivi**, scegliere il telefono *Collegato* e toccare **Apri galleria**.
-5. Le operazioni **galleria / cartelle / anteprime / lettura / download** portano l'ID del telefono selezionato. Il relay instrada ciascuna richiesta soltanto verso quel telefono e rifiuta risposte inviate da altri.
+Funzioni:
+- Inserisci RX_TOKEN e TX_TOKEN **solo in RX** al primo avvio; le chiavi sono cifrate tramite Android Keystore.
+- Consulta le richieste di attivazione TX e approva quella con il codice visualizzato sul dispositivo trasmittente.
+- Galleria principale con foto e video indicizzati, anteprime e visualizzazione grande; scheda File remoti per navigare tra le cartelle (anche nascoste) e carica altri risultati scorrendo.
+- Tocca un file, scegli "Scarica" e seleziona dove salvarlo tramite il selettore documenti Android. Il contenuto viene letto in blocchi e scritto direttamente nel documento, senza accumularlo in RAM.
+- Dopo il download, scegli "Apri". È disponibile l'annullamento.
 
-## Sicurezza e stato
-- Le chiavi GALLERY sono memorizzate cifrate con Android Keystore e vincolate all'ID.
-- RX memorizza localmente il nome e l'ID dei telefoni autorizzati (non le loro chiavi) e li mostra come *non collegati* se il relay si riavvia.
-- La presenza *Collegato* deriva dai polling HTTP del servizio GALLERY; non garantisce che l'operazione successiva riesca.
-- Il vecchio token globale TX_TOKEN **non è più accettato** come credenziale delle API di trasferimento.
-- L'identità del dispositivo sopravvive a un riavvio del relay finché TX_TOKEN configurato su Render non cambia.
-- Il server di piano Free conserva in RAM soltanto presenza e richieste; RX conserva la lista approvata sul proprio telefono. La revoca permanente di un singolo dispositivo richiederà una lista di revoca persistente e non è implementata.
-- I file transitano sul relay HTTPS ma non sono cifrati end-to-end; nessun file viene salvato sul server.
-- Nessuna funzione cerca di nascondere la notifica Android del servizio.
+Sicurezza:
+- Nessun token nel repository o APK.
+- Solo autorizzazione INTERNET: RX non richiede accesso a tutti i file e non esplora la memoria locale.
+- Tutto il traffico è HTTPS. I contenuti attraversano il relay in memoria, senza crittografia end-to-end.
 
-## Build e collaudo
-GitHub Actions: test Node per routing multi-device e autorizzazione, test Android ed entrambi gli APK debug. Collaudo su più telefoni Android reali ancora necessario.
+Limitazioni:
+- Le richieste TX vengono aggiornate ogni 10 secondi soltanto quando RX è aperto; non esistono notifiche push di sistema.
+- L'ordine dell'elenco è deciso dal TX (prima cartelle, poi nomi).
+- Download senza ripresa dopo chiusura; mantenere RX aperta durante i trasferimenti.
+- Render Free può sospendersi per inattività. Il servizio TX può essere sospeso dal sistema Android.
+- Dopo l'approvazione TX avvia il servizio, torna alla home e mantiene la notifica Android visibile. Android 15+ può sospenderlo dopo 6 ore di dataSync in 24 ore.
 
-## RX 0.3.1 — Correzione attivazioni
+Build:
+gradle :rx:testDebugUnitTest :rx:assembleDebug
 
-Nella schermata Dispositivi il pulsante **ATTIVAZIONI** apre la lista delle richieste GALLERY in attesa. Lo stato segnala anche il numero di attivazioni disponibili. In precedenza il pulsante rimandava erroneamente alla stessa schermata, impedendo di approvare un nuovo TX. Nessuna modifica al relay, alle chiavi o ai telefoni GALLERY.
-
-## RX 0.3.2 — Diagnostica dispositivo
-
-La lista RX distingue chiaramente «File disponibili ora» da «File non disponibili»; per i dispositivi che effettuano i controlli automatici mostra inoltre l'ultimo check-in comunicato dal server, se disponibile. Il check-in non equivale alla possibilità di leggere i file. Nessuna modifica a GALLERY, server, chiavi, dispositivi memorizzati o autorizzazioni.
+L'APK di debug è generato in rx/build/outputs/apk/debug. I test funzionali tra due telefoni reali richiedono un collaudo a parte.
