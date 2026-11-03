@@ -262,6 +262,7 @@ class MainActivity : Activity() {
         hasMore = true
         loading = false
         handler.removeCallbacks(autoRefresh)
+        handler.removeCallbacks(retryGallery)
         content.removeAllViews()
         status.text = if (hiddenByNomedia) "Nascosti · .nomedia" else "Galleria TX"
         val nav = horizontal()
@@ -456,6 +457,7 @@ class MainActivity : Activity() {
     private fun files(path: String) {
         mode = 2
         handler.removeCallbacks(autoRefresh)
+        handler.removeCallbacks(retryGallery)
         generation++
         folder = path
         offset = 0
