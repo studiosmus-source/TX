@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private var mode = 0 // 0 = setup, 1 = requests, 2 = files, 3 = gallery
     private var folder = ""
     private var galleryOffset = 0
+    private var nomediaOnly = false
     private var generation = 0
     private var offset = 0
     private var hasMore = false
@@ -253,7 +254,8 @@ class MainActivity : Activity() {
 
 
     /** Primary RX home: a 3-column paged gallery sourced solely from TX. */
-    private fun gallery() {
+    private fun gallery(hiddenOnly: Boolean = false) {
+        nomediaOnly = hiddenOnly
         mode = 3
         generation++
         galleryOffset = 0
@@ -261,7 +263,7 @@ class MainActivity : Activity() {
         loading = false
         handler.removeCallbacks(autoRefresh)
         content.removeAllViews()
-        status.text = "Galleria TX"
+        status.text = if (hiddenOnly) "Cartelle .nomedia" else "Galleria TX"
         val nav = horizontal()
         nav.addView(button("ATTIVAZIONI", true) { requests() },
             LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -269,6 +271,11 @@ class MainActivity : Activity() {
         nav.addView(button("FILE", true) { files("") },
             LinearLayout.LayoutParams(0, dp(48), 1f))
         content.addView(nav)
+        content.addView(space(10))
+        content.addView(button(if (hiddenOnly) "GALLERIA NORMALE"
+            else "CERCA FOTO E VIDEO .NOMEDIA", true) {
+            gallery(!hiddenOnly)
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
         content.addView(space(16))
         val grid = GridLayout(this).apply {
             columnCount = 3
@@ -285,10 +292,11 @@ class MainActivity : Activity() {
         val currentGen = generation
         val start = galleryOffset
         loading = true
-        status.text = "Galleria · Caricamento…"
+        status.text = if (nomediaOnly) "Ricerca cartelle .nomedia…" else
+            "Galleria · Caricamento…"
         ioWorker.execute {
             try {
-                val page = RxApi(credentials).gallery(start)
+                val page = RxApi(credentials).gallery(start, nomediaOnly = nomediaOnly)
                 ui {
                     if (mode != 3 || currentGen != generation) return@ui
                     val grid = content.findViewWithTag<GridLayout>("galleryGrid") ?: return@ui
@@ -297,8 +305,14 @@ class MainActivity : Activity() {
                     hasMore = page.hasMore && page.nextOffset > start
                     loading = false
                     awaitingApprovedTxUntilMs = 0L
-                    status.text = if (grid.childCount == 0 && !hasMore) "Nessuna foto o video" else
-                        "Galleria TX"
+                    status.text = when {
+                        page.truncated -> "Risultati .nomedia parziali · limite di scansione"
+                        grid.childCount == 0 && !hasMore && nomediaOnly ->
+                            "Nessuna foto/video .nomedia accessibile"
+                        grid.childCount == 0 && !hasMore -> "Nessuna foto o video"
+                        nomediaOnly -> "Cartelle .nomedia"
+                        else -> "Galleria TX"
+                    }
                     if (hasMore && grid.height < scroller.height)
                         scroller.post { nextGalleryPage() }
                 }
