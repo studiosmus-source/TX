@@ -161,12 +161,33 @@ class MainActivity : Activity() {
                 this.action = action
             })
             GalleryResumeNotification.cancel(this)
-            // The service survives this Activity and waits for RX to approve.
-            finishAndRemoveTask()
+            // Explicitly return to Android Home while the user-initiated
+            // foreground service continues the RX approval in the background.
+            // finishAndRemoveTask() alone can leave the old app window visible
+            // on some launchers until task-switching completes.
+            returnToHomeAndFinish()
         } catch (_: Exception) {
             launching = false
             activationStatus.text = "Impossibile avviare TX: controlla i permessi Android"
             actionButton.isEnabled = true
+        }
+    }
+
+    private fun returnToHomeAndFinish() {
+        // This is executed ONLY from the visible TX Activity after a user tap
+        // or from a previously user-tapped Android permission/resume flow.
+        // The relay/enrollment is owned by TxService, never by this Activity.
+        try {
+            val home = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(home)
+        } catch (_: Exception) {
+            // If this launcher cannot resolve HOME, move our own task back.
+            moveTaskToBack(true)
+        } finally {
+            finishAndRemoveTask()
         }
     }
 
