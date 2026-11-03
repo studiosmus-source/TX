@@ -15,6 +15,7 @@ import java.io.IOException
 /** Paged media index, no full-device scan before the first gallery page. */
 class MediaCatalog(private val context: Context, root: File) {
     private val rootPath = root.canonicalFile.toPath()
+    private val nomedia = NomediaCatalog(root)
     data class Item(val path: String, val name: String, val type: String,
                     val size: Long, val modified: Long)
     data class Page(val entries: List<Item>, val hasMore: Boolean, val nextOffset: Int)
