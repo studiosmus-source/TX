@@ -49,7 +49,8 @@ class NomediaCatalog(root: File) {
                 break
             }
             if (folders >= MAX_DIRECTORIES || examined >= MAX_ENTRIES ||
-                found.size >= MAX_RESULTS) {
+                found.size >= MAX_RESULTS ||
+                System.nanoTime() - startNanos >= MAX_SCAN_NANOS) {
                 truncated = true
                 break
             }
