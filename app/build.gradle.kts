@@ -11,8 +11,8 @@ android {
         applicationId = "it.osmus.tx"
         minSdk = 30
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.4.5"
+        versionCode = 15
+        versionName = "0.4.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
