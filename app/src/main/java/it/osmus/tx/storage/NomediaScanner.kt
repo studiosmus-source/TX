@@ -86,8 +86,7 @@ class NomediaScanner(root: File) {
     }
 
     private fun mediaType(extension: String): String? = when (extension) {
-        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif",
-        "tif", "tiff" -> "image"
+        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif" -> "image"
         "mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi" -> "video"
         else -> null
     }
