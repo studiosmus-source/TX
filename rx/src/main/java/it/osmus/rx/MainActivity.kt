@@ -53,6 +53,10 @@ class MainActivity : Activity() {
     private var downloading = false
     @Volatile private var cancelled = false
     private var visible = false
+    private var awaitingApprovedTxUntilMs = 0L
+    private val retryGallery = Runnable {
+        if (mode == 3 && hasMore && !loading) nextGalleryPage()
+    }
 
     private val autoRefresh = object : Runnable {
         override fun run() {
@@ -114,6 +118,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         cancelled = true
         handler.removeCallbacks(autoRefresh)
+        handler.removeCallbacks(retryGallery)
         pairWorker.shutdownNow()
         ioWorker.shutdownNow()
         thumbs.shutdownNow()
@@ -232,7 +237,15 @@ class MainActivity : Activity() {
                         RxApi(c).approve(item.id)
                         getSharedPreferences("rx_pair_state_v1", MODE_PRIVATE).edit()
                             .putBoolean("approved", true).apply()
-                        ui { if (mode == 1) { status.text = "✓ Approvazione inviata"; refreshRequests() } }
+                        ui {
+                            if (mode == 1) {
+                                // Opening the gallery is the last RX step.
+                                // TX polls approval in the foreground service and then connects.
+                                awaitingApprovedTxUntilMs =
+                                    android.os.SystemClock.elapsedRealtime() + 120_000L
+                                gallery()
+                            }
+                        }
                     } catch (e: Exception) { ui { status.text = safeError(e) } }
                 }
             }.show()
@@ -283,6 +296,7 @@ class MainActivity : Activity() {
                     galleryOffset = page.nextOffset
                     hasMore = page.hasMore && page.nextOffset > start
                     loading = false
+                    awaitingApprovedTxUntilMs = 0L
                     status.text = if (grid.childCount == 0 && !hasMore) "Nessuna foto o video" else
                         "Galleria TX"
                     if (hasMore && grid.height < scroller.height)
@@ -292,8 +306,15 @@ class MainActivity : Activity() {
                 ui {
                     if (mode == 3 && currentGen == generation) {
                         loading = false
-                        hasMore = false
-                        status.text = safeError(e)
+                        if (galleryOffset == 0 &&
+                            android.os.SystemClock.elapsedRealtime() < awaitingApprovedTxUntilMs) {
+                            status.text = "Approvazione ricevuta · attendo collegamento TX…"
+                            handler.removeCallbacks(retryGallery)
+                            handler.postDelayed(retryGallery, 3_500L)
+                        } else {
+                            hasMore = false
+                            status.text = safeError(e)
+                        }
                     }
                 }
             }
