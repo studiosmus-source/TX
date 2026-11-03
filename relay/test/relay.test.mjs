@@ -23,7 +23,7 @@ test('only correct role/token may submit or retrieve requests', async () => with
   assert.equal(res.status, 401);
   res = await access(base + '/v1/rx/request', txToken, 'POST', { op: 'list', path: '', offset: 0, limit: 20 });
   assert.equal(res.status, 404);
-  res = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'photo.jpg', offset: 0, length: 70_000 });
+  res = await access(base + '/v1/rx/request', rxToken, 'POST', { op: 'read', path: 'photo.jpg', offset: 0, length: 524_289 });
   assert.equal(res.status, 400);
 }));
 
@@ -213,5 +213,34 @@ test('16 completed long-poll thumbnails do not exhaust the queue before download
       const alreadyDelivered = await access(base + '/v1/rx/result/' + id, rxToken);
       assert.equal(alreadyDelivered.status, 404);
     }
+  })
+);
+
+test('large binary 512 KiB read remains byte-exact and authenticated', async () =>
+  withRelay(async base => {
+    const original = Buffer.alloc(512 * 1024);
+    for (let i = 0; i < original.length; i++) original[i] = i % 251;
+    const next = access(base + '/v1/tx/next', txToken);
+    const requested = await access(base + '/v1/rx/request', rxToken, 'POST',
+      { op: 'read', path: 'DCIM/large.jpg', offset: 0, length: original.length });
+    assert.equal(requested.status, 202);
+    const { id } = await requested.json();
+    const incoming = await next;
+    assert.equal(incoming.status, 200);
+    const command = await incoming.json();
+    assert.equal(command.id, id);
+    assert.equal(command.length, 512 * 1024);
+    const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', {
+      ok: true,
+      base64: original.toString('base64'),
+      nextOffset: original.length,
+      totalBytes: original.length,
+      complete: true,
+    });
+    assert.equal(posted.status, 200);
+    const response = await access(base + '/v1/rx/result/' + id, rxToken);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.deepEqual(Buffer.from(data.base64, 'base64'), original);
   })
 );
