@@ -11,23 +11,22 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
-import it.osmus.tx.remote.GallerySession
+import android.widget.Toast
 import it.osmus.tx.remote.GalleryResumeNotification
+import it.osmus.tx.remote.GallerySession
 import it.osmus.tx.remote.SecureRelaySettings
 import it.osmus.tx.remote.TxService
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
-/**
- * TX is a one-touch enrollment launcher. The foreground service owns the
- * network request and approval, so finishing this Activity never cancels it.
- */
+/** Minimal user-initiated TX launcher; network session is owned by TxService. */
 class MainActivity : Activity() {
-    private lateinit var permissionStatus: TextView
-    private lateinit var activationStatus: TextView
     private lateinit var actionButton: Button
     private lateinit var permissionButton: Button
 
@@ -35,11 +34,12 @@ class MainActivity : Activity() {
     private var startAfterNotificationPermission = false
     private var resumeFromBootReminder = false
     private var launching = false
+    private var testing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.rgb(11, 17, 30)
-        window.navigationBarColor = Color.rgb(11, 17, 30)
+        window.statusBarColor = BG
+        window.navigationBarColor = BG
         SecureRelaySettings.migrateLegacy(this)
         startAfterStoragePermission =
             savedInstanceState?.getBoolean("startAfterStoragePermission") ?: false
@@ -74,59 +74,80 @@ class MainActivity : Activity() {
     private fun buildScreen() {
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(11, 17, 30))
+            gravity = Gravity.CENTER
+            setBackgroundColor(BG)
             setPadding(dp(24), dp(32), dp(24), dp(40))
         }
-        ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(11, 17, 30))
-            isFillViewport = true
-            addView(column)
-            setContentView(this)
-        }
-        column.addView(text("GALLERY", 36f, Color.WHITE, true))
-        column.addView(space(24))
-        column.addView(space(44))
-        permissionStatus = text("", 15f, SILVER, true)
-        column.addView(permissionStatus)
+        setContentView(column)
+        column.addView(TextView(this).apply {
+            text = "GALLERY"
+            textSize = 36f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        column.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(1, dp(36))
+        })
         permissionButton = Button(this).apply {
             text = "CONSENTI ACCESSO AI FILE"
             isAllCaps = false
             setOnClickListener { startConnection() }
         }
-        column.addView(permissionButton)
-        column.addView(space(28))
-        activationStatus = text("", 15f, SKY)
-        column.addView(activationStatus)
-        column.addView(space(20))
+        column.addView(permissionButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
         actionButton = Button(this).apply {
-            text = "INVIA RICHIESTA A RX"
             isAllCaps = false
             setOnClickListener {
-                if (TxService.active) stopConnection() else startConnection()
+                if (TxService.active) testConnection() else startConnection()
             }
         }
-        column.addView(actionButton)
+        column.addView(actionButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
         updateState()
     }
 
     private fun updateState() {
-        val hasPermission = Environment.isExternalStorageManager()
-        val approved = SecureRelaySettings.load(this) != null
-        permissionStatus.text = if (hasPermission) "✓ Accesso consentito" else ""
-        permissionStatus.setTextColor(if (hasPermission) GREEN else AMBER)
-        permissionStatus.visibility = if (hasPermission) View.VISIBLE else View.GONE
-        permissionButton.visibility = if (hasPermission) View.GONE else View.VISIBLE
+        val permitted = Environment.isExternalStorageManager()
+        permissionButton.visibility = if (permitted) View.GONE else View.VISIBLE
         actionButton.text = when {
-            TxService.active -> "INTERROMPI COLLEGAMENTO"
-            approved -> "AVVIA COLLEGAMENTO"
-            else -> "INVIA RICHIESTA A RX"
+            TxService.active -> "TEST"
+            SecureRelaySettings.load(this) != null -> "AVVIA"
+            else -> "INVIA RICHIESTA"
         }
-        actionButton.isEnabled = !launching
-        activationStatus.text = when {
-            TxService.active -> TxService.connectionStatus
-            approved -> "✓ Già autorizzato: non serve un nuovo accoppiamento"
-            !hasPermission -> "Autorizza i file una sola volta, poi TX farà la richiesta"
-            else -> "Tocca INVIA RICHIESTA, approva su RX: TX si avvia da solo"
+        actionButton.isEnabled = !launching && !testing
+    }
+
+    private fun testConnection() {
+        if (testing || !TxService.active) return
+        testing = true
+        actionButton.isEnabled = false
+        // Check the running TX relay status AND actual HTTPS reachability.
+        // A public health check alone does not prove the TX service is connected.
+        thread(name = "tx-connection-test") {
+            val online = runCatching {
+                val conn = URL(SecureRelaySettings.RELAY_URL + "/health")
+                    .openConnection() as HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 5_000
+                conn.readTimeout = 5_000
+                try { conn.responseCode == 200 }
+                finally { conn.disconnect() }
+            }.getOrDefault(false)
+            val status = TxService.connectionStatus
+            val ready = TxService.active && status == "Relay HTTPS raggiungibile"
+            val response = when {
+                !TxService.active || !online -> "TEST NON DISPONIBILE"
+                ready -> "TEST OK"
+                else -> "TEST IN ATTESA"
+            }
+            runOnUiThread {
+                if (!isDestroyed && !isFinishing) {
+                    testing = false
+                    Toast.makeText(this, response, Toast.LENGTH_SHORT).show()
+                    updateState()
+                }
+            }
         }
     }
 
@@ -161,22 +182,15 @@ class MainActivity : Activity() {
                 this.action = action
             })
             GalleryResumeNotification.cancel(this)
-            // Explicitly return to Android Home while the user-initiated
-            // foreground service continues the RX approval in the background.
-            // finishAndRemoveTask() alone can leave the old app window visible
-            // on some launchers until task-switching completes.
             returnToHomeAndFinish()
         } catch (_: Exception) {
             launching = false
-            activationStatus.text = "Impossibile avviare TX: controlla i permessi Android"
-            actionButton.isEnabled = true
+            Toast.makeText(this, "AVVIO NON RIUSCITO", Toast.LENGTH_SHORT).show()
+            updateState()
         }
     }
 
     private fun returnToHomeAndFinish() {
-        // This is executed ONLY from the visible TX Activity after a user tap
-        // or from a previously user-tapped Android permission/resume flow.
-        // The relay/enrollment is owned by TxService, never by this Activity.
         try {
             val home = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -184,21 +198,10 @@ class MainActivity : Activity() {
             }
             startActivity(home)
         } catch (_: Exception) {
-            // If this launcher cannot resolve HOME, move our own task back.
             moveTaskToBack(true)
         } finally {
             finishAndRemoveTask()
         }
-    }
-
-    private fun stopConnection() {
-        GallerySession.setEnabled(this, false)
-        GalleryResumeNotification.cancel(this)
-        getSharedPreferences("tx_auto_start_v1", MODE_PRIVATE)
-            .edit().putBoolean("pending", false).apply()
-        stopService(Intent(this, TxService::class.java))
-        updateState()
-        activationStatus.text = "Collegamento interrotto"
     }
 
     @Deprecated("Android permission result callback")
@@ -221,26 +224,11 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun text(value: String, size: Float, color: Int, bold: Boolean = false) =
-        TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-            if (bold) setTypeface(typeface, Typeface.BOLD)
-        }
-
-    private fun space(value: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(1, dp(value))
-    }
-
     private fun dp(value: Int): Int = (resources.displayMetrics.density * value).toInt()
 
     companion object {
         const val EXTRA_RESUME_FROM_BOOT = "it.osmus.tx.RESUME_FROM_BOOT"
         private const val NOTIFICATION_REQUEST = 405
-        private val SKY = Color.rgb(116, 192, 238)
-        private val SILVER = Color.rgb(196, 204, 217)
-        private val GREEN = Color.rgb(102, 224, 163)
-        private val AMBER = Color.rgb(255, 193, 119)
+        private val BG = Color.rgb(11, 17, 30)
     }
 }

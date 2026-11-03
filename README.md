@@ -1,6 +1,6 @@
 # GALLERY — TX + RX Android
 
-Versioni candidate: **TX 0.4.8** e **RX 0.2.8** (accoppiamento con un solo avvio).
+Versioni candidate: **TX 0.4.10** e **RX 0.2.8** (accoppiamento con un solo avvio).
 
 ## Flusso di autorizzazione
 
@@ -8,7 +8,7 @@ Versioni candidate: **TX 0.4.8** e **RX 0.2.8** (accoppiamento con un solo avvio
 2. TX avvia un servizio in primo piano, invia **una richiesta** e chiude la propria schermata. Continua ad attendere l'approvazione anche con la schermata chiusa. Il codice di verifica compare nella notifica discreta GALLERY (se le notifiche sono abilitate), oppure riaprendo TX.
 3. Su RX, nella sezione Attivazioni, confronta il codice e scegli **APPROVA**. TX riceve la chiave su HTTPS, la salva cifrata tramite Android Keystore e avvia automaticamente la connessione al relay. Non occorre riaprire TX per premere AVVIA.
 4. RX passa automaticamente alla galleria. Da lì è possibile consultare foto, video, cartelle e altri file condivisi.
-5. Nei successivi avvii, se la credenziale TX è ancora salvata, **AVVIA COLLEGAMENTO** riparte senza nuovo pairing. Riaprendo TX puoi usare **INTERROMPI COLLEGAMENTO**.
+5. Nei successivi avvii, se la credenziale TX è ancora salvata, **AVVIA** riparte senza nuovo pairing. Durante una sessione, l’unico pulsante nell’app TX è **TEST**: verifica lo stato del servizio e la raggiungibilità HTTPS senza fermare nulla. Per interrompere l’accesso remoto è disponibile il comando **DISATTIVA** nella notifica Android di GALLERY.
 
 Il polling dell'attivazione è gestito dal servizio TX, non dalla Activity. Errori di rete temporanei durante il polling conservano la stessa richiesta. Una nuova richiesta si crea soltanto dopo scadenza o invalidazione della precedente. Nessun accesso remoto è consentito prima dell'approvazione su RX.
 
