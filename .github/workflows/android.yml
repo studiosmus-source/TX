@@ -1,7 +1,7 @@
 name: Android TX and RX
 on:
   push:
-    branches: [main]
+    branches: [main, fix/tx-minimal-test-ui-20261103]
   pull_request:
 
 jobs:
