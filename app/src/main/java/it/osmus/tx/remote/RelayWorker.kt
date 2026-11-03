@@ -89,6 +89,10 @@ class RelayWorker(
                 val chunk = catalog.readChunk(path, command.getLong("offset"), command.getInt("length"))
                 JSONObject().put("ok", true)
                     .put("base64", Base64.encodeToString(chunk.bytes, Base64.NO_WRAP))
+                    .put("sha256", java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(chunk.bytes).joinToString("") {
+                            "%02x".format(it.toInt() and 0xff)
+                        })
                     .put("totalBytes", chunk.totalBytes)
                     .put("nextOffset", chunk.nextOffset)
                     .put("complete", chunk.complete)
