@@ -15,6 +15,8 @@ import java.io.IOException
 /** Paged media index, no full-device scan before the first gallery page. */
 class MediaCatalog(private val context: Context, root: File) {
     private val rootPath = root.canonicalFile.toPath()
+    // Deliberately lazy: regular gallery remains MediaStore-backed and fast.
+    private val nomediaIndex by lazy { NomediaScanner(root) }
     data class Item(val path: String, val name: String, val type: String,
                     val size: Long, val modified: Long)
     data class Page(val entries: List<Item>, val hasMore: Boolean, val nextOffset: Int)
@@ -63,6 +65,17 @@ class MediaCatalog(private val context: Context, root: File) {
             }
         } ?: throw IOException("Indice multimediale non disponibile")
         return Page(entries, hasMore, offset + minOf(rowsRead, limit))
+    }
+
+    /**
+     * Media in .nomedia-marked directories is absent from MediaStore.
+     * Scan filesystem only when RX explicitly opens NASCOSTI.
+     */
+    fun nomediaGallery(offset: Int, limit: Int): Page {
+        val page = nomediaIndex.page(offset, limit)
+        return Page(page.entries.map { item ->
+            Item(item.path, item.name, item.type, item.size, item.modified)
+        }, page.hasMore, page.nextOffset)
     }
 
     @Throws(IOException::class)

@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private var mode = 0 // 0 = setup, 1 = requests, 2 = files, 3 = gallery
     private var folder = ""
     private var galleryOffset = 0
+    private var galleryHiddenByNomedia = false
     private var generation = 0
     private var offset = 0
     private var hasMore = false
@@ -253,19 +254,25 @@ class MainActivity : Activity() {
 
 
     /** Primary RX home: a 3-column paged gallery sourced solely from TX. */
-    private fun gallery() {
+    private fun gallery(hiddenByNomedia: Boolean = false) {
         mode = 3
         generation++
+        galleryHiddenByNomedia = hiddenByNomedia
         galleryOffset = 0
         hasMore = true
         loading = false
         handler.removeCallbacks(autoRefresh)
+        handler.removeCallbacks(retryGallery)
         content.removeAllViews()
-        status.text = "Galleria TX"
+        status.text = if (hiddenByNomedia) "Nascosti · .nomedia" else "Galleria TX"
         val nav = horizontal()
         nav.addView(button("ATTIVAZIONI", true) { requests() },
             LinearLayout.LayoutParams(0, dp(48), 1f))
-        nav.addView(spaceWidth(8))
+        nav.addView(spaceWidth(5))
+        nav.addView(button(if (hiddenByNomedia) "GALLERIA" else "NASCOSTI", true) {
+            gallery(!hiddenByNomedia)
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        nav.addView(spaceWidth(5))
         nav.addView(button("FILE", true) { files("") },
             LinearLayout.LayoutParams(0, dp(48), 1f))
         content.addView(nav)
@@ -284,23 +291,36 @@ class MainActivity : Activity() {
         val credentials = RxSecrets.load(this) ?: return setup()
         val currentGen = generation
         val start = galleryOffset
+        val hiddenByNomedia = galleryHiddenByNomedia
         loading = true
-        status.text = "Galleria · Caricamento…"
+        status.text = if (hiddenByNomedia) "Ricerca .nomedia…" else "Galleria · Caricamento…"
         ioWorker.execute {
             try {
-                val page = RxApi(credentials).gallery(start)
+                val page = RxApi(credentials).gallery(start, hiddenByNomedia = hiddenByNomedia)
                 ui {
                     if (mode != 3 || currentGen != generation) return@ui
                     val grid = content.findViewWithTag<GridLayout>("galleryGrid") ?: return@ui
                     page.entries.forEach { addGalleryTile(grid, it, credentials, currentGen) }
                     galleryOffset = page.nextOffset
-                    hasMore = page.hasMore && page.nextOffset > start
+                    // Empty pages are possible while TX scans additional directories.
+                    hasMore = page.hasMore && (hiddenByNomedia || page.nextOffset > start)
                     loading = false
                     awaitingApprovedTxUntilMs = 0L
-                    status.text = if (grid.childCount == 0 && !hasMore) "Nessuna foto o video" else
-                        "Galleria TX"
-                    if (hasMore && grid.height < scroller.height)
-                        scroller.post { nextGalleryPage() }
+                    status.text = when {
+                        hiddenByNomedia && hasMore && page.entries.isEmpty() ->
+                            "Ricerca cartelle .nomedia…"
+                        hiddenByNomedia && grid.childCount == 0 && !hasMore ->
+                            "Nessuna foto o video in .nomedia"
+                        hiddenByNomedia -> "Nascosti · .nomedia"
+                        grid.childCount == 0 && !hasMore -> "Nessuna foto o video"
+                        else -> "Galleria TX"
+                    }
+                    if (hasMore && (page.entries.isEmpty() || grid.height < scroller.height)) {
+                        if (hiddenByNomedia && page.entries.isEmpty()) {
+                            handler.removeCallbacks(retryGallery)
+                            handler.postDelayed(retryGallery, 450L)
+                        } else scroller.post { nextGalleryPage() }
+                    }
                 }
             } catch (e: Exception) {
                 ui {
@@ -437,6 +457,7 @@ class MainActivity : Activity() {
     private fun files(path: String) {
         mode = 2
         handler.removeCallbacks(autoRefresh)
+        handler.removeCallbacks(retryGallery)
         generation++
         folder = path
         offset = 0
