@@ -51,7 +51,6 @@ class MainActivity : Activity() {
     private var loading = false
     private var downloading = false
     @Volatile private var cancelled = false
-    private var selected: RemoteFile? = null
     private var visible = false
 
     private val autoRefresh = object : Runnable {
@@ -510,65 +509,57 @@ class MainActivity : Activity() {
 
     private fun chooseDownload(file: RemoteFile) {
         AlertDialog.Builder(this).setTitle(file.name)
-            .setMessage(prettySize(file.size))
-            .setNegativeButton("Annulla", null)
-            .setPositiveButton("SCARICA") { _, _ ->
-                selected = file
-                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = RemoteNames.mimeType(file.name)
-                    putExtra(Intent.EXTRA_TITLE, RemoteNames.safeName(file.name))
-                }, SAVE_REQUEST)
-            }.show()
+            .setMessage("Salvare " + prettySize(file.size) + " sul telefono RX?")
+            .setNegativeButton("ANNULLA", null)
+            .setPositiveButton("SALVA") { _, _ -> download(file) }
+            .show()
     }
 
-    @Deprecated("Uses Android's built-in document picker")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SAVE_REQUEST) {
-            val file = selected
-            selected = null
-            if (resultCode == RESULT_OK && file != null && data?.data != null)
-                download(file, data.data!!)
-        }
-    }
-
-    private fun download(file: RemoteFile, destination: Uri) {
-        val c = RxSecrets.load(this) ?: return setup()
+    /** Write to a new Android MediaStore item and publish it only after readback verification. */
+    private fun download(file: RemoteFile, previewMessage: TextView? = null,
+                         saveButton: Button? = null) {
+        if (downloading) return
+        val credentials = RxSecrets.load(this) ?: return setup()
         downloading = true
         cancelled = false
+        saveButton?.isEnabled = false
         status.text = "Download: " + file.name
+        previewMessage?.text = "Download in corso…"
         val cancel = button("ANNULLA DOWNLOAD", true) { cancelled = true }
         content.addView(cancel)
+        val store = RxMediaStore(applicationContext.contentResolver)
         ioWorker.execute {
-            var verified = false
+            var destination: RxMediaStore.Destination? = null
+            var published = false
             try {
-                val sourceDigest = java.security.MessageDigest.getInstance("SHA-256")
+                val outputDigest = java.security.MessageDigest.getInstance("SHA-256")
+                destination = store.create(file.name)
+                val target = destination
                 var total = -1L
-                contentResolver.openOutputStream(destination, "wt").use { output ->
-                    if (output == null) throw IOException("Destinazione non disponibile")
-                    val api = RxApi(c)
+                contentResolver.openOutputStream(target.uri, "w").use { output ->
+                    if (output == null) throw IOException("Impossibile aprire il file di destinazione")
+                    val api = RxApi(credentials)
                     var offset = 0L
                     var lastProgress = 0L
                     while (true) {
                         if (cancelled || Thread.currentThread().isInterrupted)
                             throw IOException("Download annullato")
                         val chunk = api.read(file.path, offset)
-                        if (total < 0) {
-                            total = chunk.total
-                            if (total != file.size)
-                                throw IOException("Dimensione del file TX cambiata: aggiorna l'elenco")
-                        }
+                        // MediaStore gallery metadata can be stale; TX's read size is authoritative.
+                        if (total < 0) total = chunk.total
                         if (total != chunk.total)
-                            throw IOException("Il file TX è cambiato durante il download")
-                        sourceDigest.update(chunk.bytes)
+                            throw IOException("Il file originale è cambiato durante il download")
                         output.write(chunk.bytes)
+                        outputDigest.update(chunk.bytes)
                         offset = chunk.nextOffset
                         val now = System.currentTimeMillis()
                         if (now - lastProgress > 400 || chunk.complete) {
                             lastProgress = now
                             val percent = if (total == 0L) 100L else offset * 100L / total
-                            ui { status.text = "Download · " + percent + "%" }
+                            ui {
+                                status.text = "Download · " + percent + "%"
+                                previewMessage?.text = "Salvataggio · " + percent + "%"
+                            }
                         }
                         if (chunk.complete) {
                             if (offset != total) throw IOException("Download incompleto")
@@ -579,31 +570,49 @@ class MainActivity : Activity() {
                 }
                 if (cancelled || Thread.currentThread().isInterrupted)
                     throw IOException("Download annullato")
-                ui { status.text = "Verifica del file salvato…" }
-                val saved = contentResolver.openInputStream(destination)
-                    ?: throw IOException("Impossibile verificare il file salvato")
-                TransferIntegrity.verifySaved(saved, total, sourceDigest.digest())
-                verified = true
+                ui {
+                    status.text = "Verifica file…"
+                    previewMessage?.text = "Verifica file salvato…"
+                }
+                val stream = contentResolver.openInputStream(target.uri)
+                    ?: throw IOException("Android non permette di verificare il file salvato")
+                TransferIntegrity.verifySaved(stream, total, outputDigest.digest())
+                store.publish(target)
+                published = true
                 ui {
                     status.text = "Salvato e verificato: " + file.name
-                    AlertDialog.Builder(this).setMessage("Download completato e verificato")
-                        .setNegativeButton("Chiudi", null)
+                    previewMessage?.text = "Salvato in " + target.relativePath
+                    AlertDialog.Builder(this)
+                        .setTitle("File salvato")
+                        .setMessage(file.name + "\n\nCartella: " + target.relativePath)
+                        .setNegativeButton("CHIUDI", null)
                         .setPositiveButton("APRI") { _, _ ->
                             runCatching {
                                 startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(destination, RemoteNames.mimeType(file.name))
+                                    setDataAndType(target.uri, RemoteNames.mimeType(file.name))
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 })
-                            }.onFailure { status.text = "Nessuna app disponibile per aprire il file" }
+                            }.onFailure {
+                                status.text = "File salvato, ma nessuna app può aprirlo"
+                            }
                         }.show()
                 }
-            } catch (e: Exception) {
-                // ACTION_CREATE_DOCUMENT created a new destination: discard incomplete files.
-                if (!verified) runCatching { contentResolver.delete(destination, null, null) }
-                ui { status.text = "Download non completato: " + safeError(e) }
+            } catch (error: Exception) {
+                if (!published) destination?.let { runCatching { store.discard(it) } }
+                ui {
+                    val message = error.message ?: "errore sconosciuto"
+                    status.text = "Download fallito: " + message
+                    previewMessage?.text = "Salvataggio non riuscito: " + message
+                    AlertDialog.Builder(this)
+                        .setTitle("Download non riuscito")
+                        .setMessage(message)
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
             } finally {
                 ui {
                     downloading = false
+                    saveButton?.isEnabled = true
                     content.removeView(cancel)
                     if ((mode == 2 || mode == 3) && hasMore && !loading) {
                         if (mode == 3) nextGalleryPage() else nextPage()
@@ -675,7 +684,6 @@ class MainActivity : Activity() {
     }
 
     companion object {
-        private const val SAVE_REQUEST = 501
         private val BG = Color.rgb(11, 17, 30)
         private val PANEL = Color.rgb(25, 37, 57)
         private val BLUE = Color.rgb(116, 192, 238)
