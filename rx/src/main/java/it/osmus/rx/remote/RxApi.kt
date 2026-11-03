@@ -43,17 +43,22 @@ class RxApi(private val credentials: Credentials) {
         val path: String, val name: String, val type: String,
         val size: Long, val modified: Long
     )
-    data class GalleryPage(val entries: List<GalleryItem>, val hasMore: Boolean, val nextOffset: Int)
+    data class GalleryPage(val entries: List<GalleryItem>, val hasMore: Boolean,
+                           val nextOffset: Int, val truncated: Boolean)
 
-    fun gallery(offset: Int, limit: Int = 36): GalleryPage {
-        val result = call(JSONObject().put("op", "gallery").put("path", "")
+    fun gallery(offset: Int, limit: Int = 36, nomediaOnly: Boolean = false): GalleryPage {
+        val result = call(JSONObject().put("op", "gallery")
+            .put("path", if (nomediaOnly) ".nomedia" else "")
             .put("offset", offset).put("limit", limit))
+        if (nomediaOnly && !result.optBoolean("nomedia", false))
+            throw IOException("Aggiorna GALLERY TX per visualizzare i file .nomedia")
         val entries = result.getJSONArray("entries")
         return GalleryPage((0 until entries.length()).map { index ->
             val item = entries.getJSONObject(index)
             GalleryItem(item.getString("path"), item.getString("name"),
                 item.getString("type"), item.getLong("size"), item.getLong("modified"))
-        }, result.getBoolean("hasMore"), result.getInt("nextOffset"))
+        }, result.getBoolean("hasMore"), result.getInt("nextOffset"),
+            result.optBoolean("truncated", false))
     }
 
     fun thumbnail(path: String): ByteArray {
