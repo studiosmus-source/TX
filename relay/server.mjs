@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const MAX_REQUEST_BYTES = 4096;
-const MAX_RESULT_BYTES = 160_000;
+// Up to 512 KiB of raw file data becomes ~699 KiB in base64 JSON.
+const MAX_RESULT_BYTES = 800_000;
+const MAX_READ_BYTES = 512 * 1024;
 const MAX_PENDING = 16;
 const TTL_MS = 120_000;
 const PAIR_TTL_MS = 600_000;
@@ -167,7 +169,7 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         if (!obj || !['list', 'read', 'gallery', 'thumb', 'preview'].includes(obj.op) || typeof obj.path !== 'string' || obj.path.length > 1024 || obj.path.includes('\0') ||
             !Number.isSafeInteger(obj.offset) || obj.offset < 0 ||
             ((obj.op === 'list' || obj.op === 'gallery') && (!Number.isSafeInteger(obj.limit) || obj.limit < 1 || obj.limit > (obj.op === 'gallery' ? 80 : 200))) ||
-            (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > 65_536))) {
+            (obj.op === 'read' && (!Number.isSafeInteger(obj.length) || obj.length < 1 || obj.length > MAX_READ_BYTES))) {
           return send(res, 400, { error: 'invalid_request' });
         }
         const id = randomUUID();
@@ -183,10 +185,20 @@ export function createRelay({ txToken, rxToken, requireTls = true } = {}) {
         if (!job || job.state !== 'sent') return send(res, 404, { error: 'missing' });
         const data = await receive(req, MAX_RESULT_BYTES);
         if (!data || typeof data.ok !== 'boolean') return send(res, 400, { error: 'invalid_response' });
-        job.result = data;
-        job.state = 'done';
-        for (const waiter of job.waitingRx) send(waiter, 200, data);
+        // A result handed directly to a waiting RX has already been consumed.
+        // Keeping it in pending used to leak one slot until TTL (120 seconds),
+        // causing 429 "busy" after only 16 completed thumbnail requests.
+        const liveWaiters = [...job.waitingRx].filter(waiter =>
+          !waiter.destroyed && !waiter.writableEnded);
         job.waitingRx.clear();
+        if (liveWaiters.length > 0) {
+          pending.delete(job.id);
+          for (const waiter of liveWaiters) send(waiter, 200, data);
+        } else {
+          // RX was between polls: retain the result until its next GET.
+          job.result = data;
+          job.state = 'done';
+        }
         return send(res, 200, { delivered: true });
       }
       const rxResult = /^\/v1\/rx\/result\/([0-9a-f-]{36})$/.exec(pathname);
