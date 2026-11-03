@@ -8,7 +8,7 @@ const rxToken = 'RX-token-for-tests-12345678901234567890123';
 async function withRelay(fn) {
   const relay = createRelay({ txToken, rxToken, requireTls: false });
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve));
-  try { await fn(`http://127.0.0.1:${relay.address().port}`); }
+  try { await fn(`http://127.0.0.1:${relay.address().port}`, relay); }
   finally { relay.closeAllConnections(); await new Promise(resolve => relay.close(resolve)); }
 }
 
@@ -166,3 +166,52 @@ test('RX gallery and preview are authorized, bounded and routed to TX', async ()
     assert.deepEqual(await result.json(),answer);
   }
 }));
+
+
+test('16 completed long-poll thumbnails do not exhaust the queue before download', async () =>
+  withRelay(async (base, relay) => {
+    for (let i = 0; i < 20; i++) {
+      const txNext = access(base + '/v1/tx/next', txToken);
+      const command = i === 19
+        ? { op: 'read', path: 'DCIM/original.jpg', offset: 0, length: 5 }
+        : { op: 'thumb', path: 'DCIM/image-' + i + '.jpg', offset: 0 };
+      const created = await access(base + '/v1/rx/request', rxToken, 'POST', command);
+      assert.equal(created.status, 202, 'request ' + i + ' must not see busy');
+      const { id } = await created.json();
+      const txResult = await txNext;
+      assert.equal(txResult.status, 200);
+      assert.equal((await txResult.json()).id, id);
+
+      // Observe the incoming RX long-poll on the server, not just the client
+      // call. This forces coverage of the direct waiter delivery branch.
+      const waiterArrived = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          relay.off('request', onRequest);
+          reject(new Error('RX long-poll did not arrive'));
+        }, 3000);
+        function onRequest(req) {
+          if (req.method === 'GET' && req.url === '/v1/rx/result/' + id) {
+            clearTimeout(timer);
+            relay.off('request', onRequest);
+            resolve();
+          }
+        }
+        relay.on('request', onRequest);
+      });
+      const waitingRx = access(base + '/v1/rx/result/' + id, rxToken);
+      await waiterArrived;
+
+      const data = { ok: true, base64: Buffer.from('hello').toString('base64'),
+        totalBytes: 5, nextOffset: 5, complete: true };
+      const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', data);
+      assert.equal(posted.status, 200);
+      const delivered = await waitingRx;
+      assert.equal(delivered.status, 200);
+      assert.deepEqual(await delivered.json(), data);
+
+      // The waiter consumed the result: it must no longer count as pending.
+      const alreadyDelivered = await access(base + '/v1/rx/result/' + id, rxToken);
+      assert.equal(alreadyDelivered.status, 404);
+    }
+  })
+);
