@@ -18,7 +18,16 @@ class MediaCatalog(private val context: Context, root: File) {
     private val nomedia = NomediaCatalog(root)
     data class Item(val path: String, val name: String, val type: String,
                     val size: Long, val modified: Long)
-    data class Page(val entries: List<Item>, val hasMore: Boolean, val nextOffset: Int)
+    data class Page(val entries: List<Item>, val hasMore: Boolean, val nextOffset: Int,
+                    val truncated: Boolean = false)
+
+    /** Opt-in media suppressed by .nomedia markers, not supplied by MediaStore. */
+    fun nomediaGallery(offset: Int, limit: Int): Page {
+        val result = nomedia.page(offset, limit)
+        return Page(result.entries.map {
+            Item(it.path, it.name, it.type, it.size, it.modified)
+        }, result.hasMore, result.nextOffset, result.truncated)
+    }
 
     fun gallery(offset: Int, limit: Int): Page {
         require(offset >= 0 && limit in 1..80)
