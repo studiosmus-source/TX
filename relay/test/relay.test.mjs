@@ -166,3 +166,41 @@ test('RX gallery and preview are authorized, bounded and routed to TX', async ()
     assert.deepEqual(await result.json(),answer);
   }
 }));
+
+
+test('byte-for-byte photo, audio and video blocks survive relay with SHA-256', async () => withRelay(async base => {
+  const { randomBytes, createHash } = await import('node:crypto');
+  const expected = randomBytes(174_221);
+  for (const path of ['DCIM/photo.jpg', 'Music/voice.m4a', 'Movies/clip.mp4']) {
+    const received = [];
+    let offset = 0;
+    while (offset < expected.length) {
+      const requested = await access(base + '/v1/rx/request', rxToken, 'POST',
+        { op: 'read', path, offset, length: 65_536 });
+      assert.equal(requested.status, 202);
+      const { id } = await requested.json();
+      const txReply = await access(base + '/v1/tx/next', txToken);
+      assert.equal(txReply.status, 200);
+      const command = await txReply.json();
+      assert.equal(command.id, id);
+      assert.equal(command.offset, offset);
+      const bytes = expected.subarray(offset, offset + command.length);
+      const nextOffset = offset + bytes.length;
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      const posted = await access(base + '/v1/tx/result/' + id, txToken, 'POST', {
+        ok: true, base64: bytes.toString('base64'), sha256,
+        totalBytes: expected.length, nextOffset, complete: nextOffset === expected.length,
+      });
+      assert.equal(posted.status, 200);
+      const result = await access(base + '/v1/rx/result/' + id, rxToken);
+      assert.equal(result.status, 200);
+      const data = await result.json();
+      const actual = Buffer.from(data.base64, 'base64');
+      assert.equal(createHash('sha256').update(actual).digest('hex'), data.sha256);
+      assert.equal(data.nextOffset, nextOffset);
+      received.push(actual);
+      offset = data.nextOffset;
+    }
+    assert.deepEqual(Buffer.concat(received), expected, path);
+  }
+}));
