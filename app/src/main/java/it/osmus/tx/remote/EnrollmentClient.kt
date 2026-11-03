@@ -7,7 +7,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Outbound HTTPS enrollment. No remote file access until user taps Save and Start. */
+/** User-initiated HTTPS enrollment; file access starts only after explicit RX approval. */
 class EnrollmentClient(private val deviceName: String) {
     private val running = AtomicBoolean(true)
     @Volatile private var current: HttpURLConnection? = null
