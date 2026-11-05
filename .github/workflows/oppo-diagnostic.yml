@@ -1,0 +1,56 @@
+name: OPPO TX install diagnostics
+on:
+  push:
+    branches: [diagnostic/oppo-install-20261105]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [original, reduced-permissions]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Create independent diagnostic variant
+        if: matrix.variant == 'reduced-permissions'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle.kts')
+          x = p.read_text()
+          assert 'applicationId = "it.osmus.tx"' in x
+          p.write_text(x.replace('applicationId = "it.osmus.tx"','applicationId = "it.osmus.tx.installtest"'))
+          m = Path('app/src/main/AndroidManifest.xml')
+          s = m.read_text()
+          assert '<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />' in s
+          s = s.replace('<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />', '')
+          s = s.replace('android:label="GALLERY"', 'android:label="TX INSTALL TEST"')
+          m.write_text(s)
+          PY
+      - name: Assemble APK
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Verify APK structure and signature
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          unzip -t "$APK" | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | head -n 5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TX-oppo-${{ matrix.variant }}-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
