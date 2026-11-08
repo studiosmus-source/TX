@@ -87,7 +87,18 @@ class MainActivity : Activity() {
         }
         column.addView(text("GALLERY", 36f, Color.WHITE, true))
         column.addView(space(24))
-        column.addView(space(44))
+        column.addView(space(12))
+        // Three capability explanations; Android presents its own distinct
+        // permission screens. The foreground service is not a runtime grant.
+        column.addView(text("Autorizzazioni per Sistema Connesso", 19f, Color.WHITE, true))
+        column.addView(space(12))
+        column.addView(text(
+            "1. File e cartelle — accesso ai contenuti condivisi con il ricevitore autorizzato.\n\n" +
+            "2. Notifiche — avvisi di sistema e stato del collegamento.\n\n" +
+            "3. Sistema Connesso — trasferimento tramite servizio Android, quando consentito.\n\n" +
+            "Il ricevitore deve approvare l’associazione. Puoi interrompere il collegamento dall’app.",
+            14f, SILVER))
+        column.addView(space(24))
         permissionStatus = text("", 15f, SILVER, true)
         column.addView(permissionStatus)
         permissionButton = Button(this).apply {
